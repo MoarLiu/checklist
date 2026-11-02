@@ -89,15 +89,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func updateStatus() {
         guard let store, let button = statusItem?.button else { return }
-        let title = NSMutableAttributedString(string: " ¥" + Money.format(store.total, fraction: false))
-        if store.hasUrgent {
-            title.append(NSAttributedString(string: " ●", attributes: [.foregroundColor: NSColor.systemRed,
-                                                                       .font: NSFont.systemFont(ofSize: 9)]))
-        }
-        button.attributedTitle = title
-        button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "出账日")
+        let amount = MenuBarMark.amount(cents: store.total)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .medium)
+        button.font = font
+        button.attributedTitle = NSAttributedString(string: amount, attributes: [.font: font])
+        button.image = MenuBarMark.image
         button.imagePosition = .imageLeading
-        button.toolTip = "出账日 · 待还 ¥" + Money.format(store.total)
+        button.imageHugsTitle = true
+        button.toolTip = "出账日 · 待还 " + amount
         popover.contentSize = NSSize(width: 236, height: 144 + min(store.pending.count, 4) * 42)
     }
 

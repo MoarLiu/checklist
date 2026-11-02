@@ -26,4 +26,4 @@ iconutil -c icns build/AppIcon.iconset -o Resources/AppIcon.icns
 ./scripts/package-dmg.sh
 ```
 
-SVG、PNG 和 ICNS 均包含在 App 包中，主窗口侧栏直接使用包内 PNG，Finder 和关于窗口使用 ICNS。macOS 菜单栏继续使用表示提醒状态的铃铛符号。
+SVG、PNG 和 ICNS 均包含在 App 包中，主窗口侧栏直接使用包内 PNG，Finder 和关于窗口使用 ICNS。macOS 菜单栏使用同一标志的单色线条版：两枚环扣、账单页、还款勾和右下折角，不带提醒圆点。

@@ -23,6 +23,8 @@ struct BillTests {
         }
         #expect(Money.format(126080) == "1,260.80")
         #expect(Money.format(10 + 20) == "0.30")
+        #expect(MenuBarMark.amount(cents: 2_947_000) == "−¥29,470")
+        #expect(MenuBarMark.amount(cents: 0) == "¥0")
     }
 
     @Test func dailyDeliveryAndSnooze() throws {

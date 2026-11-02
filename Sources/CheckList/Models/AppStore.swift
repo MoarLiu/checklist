@@ -64,7 +64,6 @@ final class AppStore {
     var paidTotal: Int64 { history.reduce(0) { $0 + $1.amountInCents } }
     var dueCount: Int { pending.filter { $0.daysLeft(now: now) == 0 }.count }
     var overdueCount: Int { pending.filter { $0.daysLeft(now: now) < 0 }.count }
-    var hasUrgent: Bool { dueCount + overdueCount > 0 }
 
     func reload() throws { bills = try context.fetch(FetchDescriptor<Bill>()) }
     func bill(_ id: UUID) -> Bill? { bills.first { $0.id == id } }
