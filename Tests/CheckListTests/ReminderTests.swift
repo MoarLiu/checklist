@@ -177,6 +177,60 @@ struct ReminderTests {
         #expect(presented == [first.id, second.id])
     }
 
+    @Test func failedSnoozedDeliveryRetainsDeadlineForRetry() async throws {
+        enum Failure: Error { case diskFull }
+        var fail = false
+        let store = try AppStore(inMemory: true, persist: {
+            if fail { throw Failure.diskFull }
+            try $0.save()
+        })
+        store.add(kind: .loan, name: "稍后提醒", cents: 100, due: now)
+        let bill = try #require(store.bills.first)
+        let deadline = now.addingTimeInterval(-10)
+        bill.snoozeUntil = deadline
+        #expect(store.save())
+        fail = true
+        var presented = 0
+        let service = ReminderService(store: store, settings: makeSettings(), systemNotificationsEnabled: false,
+                                      clock: { now }, presenter: { _ in presented += 1 })
+        await service.reconcile()
+        #expect(bill.lastRemindedAt == nil)
+        #expect(bill.snoozeUntil == deadline)
+        #expect(presented == 0)
+        fail = false
+        await service.reconcile()
+        #expect(presented == 1)
+        #expect(bill.snoozeUntil == nil)
+    }
+
+    @Test func failedSystemDeliveryAbsorptionRestoresPreviousValues() async throws {
+        enum Failure: Error { case diskFull }
+        var fail = false
+        let store = try AppStore(inMemory: true, persist: {
+            if fail { throw Failure.diskFull }
+            try $0.save()
+        })
+        store.add(kind: .creditCard, name: "系统提醒", cents: 100, due: now)
+        let bill = try #require(store.bills.first)
+        let deadline = now.addingTimeInterval(-10)
+        bill.snoozeUntil = deadline
+        #expect(store.save())
+        let client = FakeNotifications()
+        client.deliveredValues = [delivered(bill)]
+        let service = ReminderService(store: store, settings: makeSettings(), client: client,
+                                      clock: { now }, presenter: { _ in })
+        fail = true
+        await service.reconcile()
+        #expect(bill.lastRemindedAt == nil)
+        #expect(bill.snoozeUntil == deadline)
+        #expect(client.deliveredValues.count == 1)
+        fail = false
+        await service.reconcile()
+        #expect(bill.lastRemindedAt == now)
+        #expect(bill.snoozeUntil == nil)
+        #expect(service.activeBillID == nil)
+    }
+
     @Test func plannerReservesFirstNotificationForEachBill() throws {
         let store = try AppStore(inMemory: true)
         for offset in 0..<10 {

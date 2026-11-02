@@ -85,14 +85,14 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         // Retain foreground delivery keys across brief OS delivery races, but bound their lifetime.
         let now = clock()
         suppressedNotificationIDs = suppressedNotificationIDs.filter { now.timeIntervalSince($0.value) < 172800 }
-        await absorbDeliveredNotifications()
+        guard await absorbDeliveredNotifications() else { return }
         guard !Task.isCancelled else { return }
         store.now = now
         store.onClockChange?()
         if let activeBillID, let bill = store.bill(activeBillID), !bill.isPaid, !bill.isMuted, bill.snoozeUntil == nil {
             // Keep the current card until an explicit action is saved successfully.
         } else if activeBillID != nil { closePanel() }
-        checkDue()
+        guard checkDue() else { return }
         guard !Task.isCancelled else { return }
         await synchronizeNotifications()
     }
@@ -112,11 +112,11 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    private func absorbDeliveredNotifications() async {
-        guard let client else { return }
+    private func absorbDeliveredNotifications() async -> Bool {
+        guard let client else { return true }
         let delivered = await client.delivered()
-        guard !Task.isCancelled else { return }
-        var changed = false
+        guard !Task.isCancelled else { return false }
+        var snapshots: [UUID: ReminderDeliverySnapshot] = [:]
         for notification in delivered {
             guard suppressedNotificationIDs[notification.identifier] == nil,
                   let id = notification.billID, let bill = store.bill(id),
@@ -124,29 +124,33 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
                   !bill.isPaid, !bill.isMuted,
                   notification.date > (bill.lastRemindedAt ?? .distantPast),
                   notification.date >= (bill.snoozeUntil ?? .distantPast) else { continue }
+            if snapshots[id] == nil { snapshots[id] = ReminderDeliverySnapshot(bill) }
             bill.lastRemindedAt = notification.date
             bill.snoozeUntil = nil
-            changed = true
         }
         // This save does not recursively trigger a new synchronization task.
-        if changed {
-            _ = store.saveReminderState()
+        if !snapshots.isEmpty {
+            return store.saveReminderState(restoring: Array(snapshots.values))
         }
+        return true
     }
 
-    private func checkDue() {
-        guard panel == nil, activeBillID == nil else { return }
+    @discardableResult
+    private func checkDue() -> Bool {
+        guard panel == nil, activeBillID == nil else { return true }
         let now = clock()
         guard let bill = store.pending.first(where: {
             guard let date = $0.nextReminder(now: now, hour: settings.hour, minute: settings.minute) else { return false }
             return date <= now
-        }) else { return }
+        }) else { return true }
+        let snapshot = ReminderDeliverySnapshot(bill)
         bill.lastRemindedAt = now
         bill.snoozeUntil = nil
-        guard store.saveReminderState() else { return }
+        guard store.saveReminderState(restoring: [snapshot]) else { return false }
         activeBillID = bill.id
         if let presenter { presenter(bill) }
         else { present(bill: bill, preview: false) }
+        return true
     }
 
     private func synchronizeNotifications() async {
@@ -243,12 +247,13 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
                                             willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         // The custom panel supplies both the visual and sound while this process runs.
         let requestID = notification.request.identifier
-        await MainActor.run {
+        let handled = await MainActor.run {
+            guard checkDue() else { return false }
             suppressedNotificationIDs[requestID] = clock()
-            checkDue()
             refresh()
+            return true
         }
-        return []
+        return handled ? [] : [.banner, .sound]
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,

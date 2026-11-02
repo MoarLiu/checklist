@@ -6,6 +6,26 @@ enum AppRoute: Equatable {
     case home, add, history, detail(UUID)
 }
 
+@MainActor
+struct ReminderDeliverySnapshot {
+    let bill: Bill
+    let id: UUID
+    let lastRemindedAt: Date?
+    let snoozeUntil: Date?
+
+    init(_ bill: Bill) {
+        self.bill = bill
+        id = bill.id
+        lastRemindedAt = bill.lastRemindedAt
+        snoozeUntil = bill.snoozeUntil
+    }
+
+    func restore(_ target: Bill) {
+        target.lastRemindedAt = lastRemindedAt
+        target.snoozeUntil = snoozeUntil
+    }
+}
+
 @MainActor @Observable
 final class AppStore {
     let container: ModelContainer
@@ -50,12 +70,21 @@ final class AppStore {
     func bill(_ id: UUID) -> Bill? { bills.first { $0.id == id } }
 
     @discardableResult
-    func saveReminderState() -> Bool {
+    func saveReminderState(restoring snapshots: [ReminderDeliverySnapshot]) -> Bool {
         do {
             try persist(context)
             return true
         } catch {
             context.rollback()
+            try? reload()
+            // SwiftData on macOS 26 may leave @Model property caches unchanged
+            // after rollback. Restore the visible values as well as the context.
+            for snapshot in snapshots {
+                snapshot.restore(snapshot.bill)
+                if let current = bill(snapshot.id), current !== snapshot.bill {
+                    snapshot.restore(current)
+                }
+            }
             errorMessage = "无法保存提醒状态：\(error.localizedDescription)"
             return false
         }
