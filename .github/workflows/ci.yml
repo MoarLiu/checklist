@@ -1,0 +1,17 @@
+name: macOS checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test
+        run: swift test -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+      - name: Build application and verify DMG
+        env:
+          CODE_SIGN_IDENTITY: "-"
+        run: ./scripts/package-dmg.sh

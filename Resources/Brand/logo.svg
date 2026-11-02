@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="出账日：账单日历、还款勾和到期提醒点">
+  <defs>
+    <linearGradient id="tile" x1="220" y1="80" x2="820" y2="944" gradientUnits="userSpaceOnUse"><stop stop-color="#3FF0CD"/><stop offset="1" stop-color="#0FBFA0"/></linearGradient>
+    <linearGradient id="paper" x1="400" y1="268" x2="650" y2="764" gradientUnits="userSpaceOnUse"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#E5FFF7"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#034033" flood-opacity=".18"/></filter>
+  </defs>
+  <rect x="80" y="80" width="864" height="864" rx="192" fill="url(#tile)" stroke="#FFFFFF" stroke-opacity=".48" stroke-width="5"/>
+  <path d="M320 268H704C739 268 768 297 768 332V652L656 764H320C285 764 256 735 256 700V332C256 297 285 268 320 268Z" fill="url(#paper)" filter="url(#shadow)"/>
+  <path d="M656 764V682Q656 652 686 652H768Z" fill="#A9E9D8"/>
+  <path d="M300 382H724" stroke="#D3F6EA" stroke-width="10" stroke-linecap="round"/>
+  <rect x="364" y="216" width="48" height="100" rx="24" fill="#134E4A"/>
+  <rect x="612" y="216" width="48" height="100" rx="24" fill="#134E4A"/>
+  <path d="M374 530L468 620L648 448" fill="none" stroke="#134E4A" stroke-width="62" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="762" cy="288" r="44" fill="#FFCA57" stroke="#FFFFFF" stroke-width="10"/>
+</svg>
