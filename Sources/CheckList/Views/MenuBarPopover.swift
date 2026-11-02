@@ -51,8 +51,8 @@ struct MenuBarPopover: View {
             }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(Design.secondary).padding(.top, 4)
         }
         .padding(12).frame(width: 236).foregroundStyle(Design.body)
-        .background(Color(hex: 0xD6F8EF).opacity(0.25))
-        .preferredColorScheme(.light)
+        .background(Design.popoverFill)
+        .tint(Design.teal)
     }
 }
 
@@ -93,7 +93,9 @@ struct ReminderSettingsView: View {
             }
         }
         .padding(24).frame(width: 410).foregroundStyle(Design.body)
-        .background(.ultraThinMaterial).preferredColorScheme(.light)
+        .background(Design.settingsFill)
+        .background(.ultraThinMaterial)
+        .tint(Design.teal)
         .onChange(of: service.settings.hour) { service.refresh() }
         .onChange(of: service.settings.minute) { service.refresh() }
         .onChange(of: service.settings.sound) { service.refresh() }

@@ -13,6 +13,7 @@
 - 每日提醒时间和提示音设置，启动及唤醒后补查。
 - SwiftData 本地账本，无需账号或服务端；金额以整数分保存。
 - 紧凑的 760 × 520 窗口，macOS 26 及以上采用 Liquid Glass，旧系统采用 Material。
+- 跟随系统切换浅色与深色外观，输入框、文字、到期标签及提醒卡统一适配。
 
 ## 安装与使用
 
@@ -72,6 +73,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 可通过 `CODE_SIGN_IDENTITY` 指定其他已有证书。脚本不会创建证书，也不会在指定证书缺失时自动改用其他签名。
 
 构建脚本默认使用 `/Applications/Xcode.app`，也可设置 `DEVELOPER_DIR`。使用 `CHECKLIST_DATA_DIR` 可以指定独立验收账本，该模式不会操作正式系统通知队列。安装包输出到 `release/`，可用 `CHECKLIST_RELEASE_DIR` 修改输出目录。
+
+在独立验收账本模式下，可设置 `CHECKLIST_PREVIEW_APPEARANCE=light` 或 `dark` 验证两种外观；此设置只影响该预览进程，正常使用自动跟随系统。
 
 ## 当前范围
 

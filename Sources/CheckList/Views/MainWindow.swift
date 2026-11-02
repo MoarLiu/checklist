@@ -8,7 +8,7 @@ struct RootView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            Rectangle().fill(.white.opacity(0.5)).frame(width: 1)
+            Rectangle().fill(Design.sidebarDivider).frame(width: 1)
             ScrollView {
                 Group {
                     switch store.route {
@@ -31,12 +31,12 @@ struct RootView: View {
         .frame(width: 760, height: 520)
         .background {
             // A restrained tint keeps the teal identity over any desktop wallpaper.
-            LinearGradient(colors: [Color(hex: 0xD7EEEF).opacity(0.5), Color(hex: 0xBDF5E6).opacity(0.3)],
+            LinearGradient(colors: [Design.windowTop, Design.windowBottom],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
         }
         .glassCard(radius: 28, thin: false)
         .clipShape(RoundedRectangle(cornerRadius: 28))
-        .preferredColorScheme(.light)
+        .tint(Design.teal)
         .overlay(alignment: .bottom) {
             if let toast = store.toast {
                 Text(toast).font(.system(size: 12, weight: .medium))
@@ -78,7 +78,7 @@ struct RootView: View {
             .buttonStyle(.plain).foregroundStyle(Design.secondary).padding(.top, 12)
         }
         .padding(16).frame(width: 176, height: 520)
-        .background(.white.opacity(0.1))
+        .background(Design.sidebarFill)
     }
 
     private var isHistoryDetail: Bool {
@@ -95,7 +95,7 @@ struct RootView: View {
                 Text("\(count)").font(.system(size: 10)).foregroundStyle(Design.secondary)
             }
             .foregroundStyle(Design.ink).padding(.horizontal, 12).frame(height: 28)
-            .background(.white.opacity(selected ? 0.7 : 0), in: Capsule())
+            .background(selected ? Design.selectionFill : .clear, in: Capsule())
             .contentShape(Capsule())
         }
         .buttonStyle(.plain).padding(.bottom, 6)
@@ -113,7 +113,7 @@ struct HomeView: View {
                     Text("本期待还总额").font(.system(size: 12)).foregroundStyle(Design.secondary)
                     HStack(alignment: .top, spacing: 4) {
                         Text("¥").font(.system(size: 20, weight: .semibold)).padding(.top, 5)
-                            .foregroundStyle(Color(hex: 0x0F766E))
+                            .foregroundStyle(Design.currency)
                         CountingAmount(cents: Double(store.total)).font(.system(size: 46, weight: .semibold))
                             .tracking(-0.9).foregroundStyle(Design.ink)
                             .animation(reduceMotion ? nil : .easeOut(duration: 0.8), value: store.total)
@@ -121,7 +121,7 @@ struct HomeView: View {
                     }
                     HStack(spacing: 6) {
                         Text("共 \(store.pending.count) 笔未还")
-                        if store.dueCount > 0 { Text("· \(store.dueCount) 笔今天到期").foregroundStyle(Color(hex: 0x92400E)) }
+                        if store.dueCount > 0 { Text("· \(store.dueCount) 笔今天到期").foregroundStyle(Design.todayText) }
                         if store.overdueCount > 0 { Text("· \(store.overdueCount) 笔逾期").foregroundStyle(Design.danger) }
                     }.font(.system(size: 12)).foregroundStyle(Design.secondary)
                 }
@@ -163,7 +163,7 @@ struct BillRow: View {
                     .frame(width: 106, alignment: .trailing).minimumScaleFactor(0.6).lineLimit(1)
             }
             .padding(12).frame(maxWidth: .infinity).glassCard()
-            .overlay(RoundedRectangle(cornerRadius: 16).fill(.white.opacity(hovered ? 0.15 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 16).fill(hovered ? Design.rowHover : .clear))
             .opacity(bill.isPaid ? 0.8 : 1).contentShape(RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain).onHover { hovered = $0 }
@@ -241,17 +241,33 @@ struct AddBillView: View {
                         .accessibilityElement(children: .contain).accessibilityLabel("账单类型")
                 }
                 field("名称（选填）") {
-                    TextField(kind == .creditCard ? "如：招商银行信用卡" : "如：房贷", text: $name)
+                    TextField("", text: $name)
                         .textFieldStyle(.plain).font(.system(size: 13))
+                        .overlay(alignment: .leading) {
+                            if name.isEmpty {
+                                Text(kind == .creditCard ? "如：招商银行信用卡" : "如：房贷")
+                                    .font(.system(size: 13)).foregroundStyle(Design.secondary)
+                                    .allowsHitTesting(false).accessibilityHidden(true)
+                            }
+                        }
                         .padding(.horizontal, 14).frame(height: 36).glassCard()
                         .accessibilityLabel("账单名称")
+                        .accessibilityHint("选填")
                 }
                 field("账单金额") {
                     HStack(spacing: 8) {
-                        Text("¥").font(.system(size: 20)).foregroundStyle(Color(hex: 0x0F766E))
-                        TextField("0.00", text: $amount).textFieldStyle(.plain)
+                        Text("¥").font(.system(size: 20)).foregroundStyle(Design.currency)
+                        TextField("", text: $amount).textFieldStyle(.plain)
                             .font(.system(size: 24, weight: .semibold)).monospacedDigit()
+                            .overlay(alignment: .leading) {
+                                if amount.isEmpty {
+                                    Text("0.00").font(.system(size: 24, weight: .semibold)).monospacedDigit()
+                                        .foregroundStyle(Design.secondary)
+                                        .allowsHitTesting(false).accessibilityHidden(true)
+                                }
+                            }
                             .focused($amountFocused).accessibilityLabel("账单金额")
+                            .accessibilityHint("人民币，最多两位小数")
                     }.padding(.horizontal, 14).frame(height: 48).glassCard()
                     if !amount.isEmpty && Money.parse(amount) == nil {
                         Text("请输入大于 0 的金额，最多两位小数")
@@ -325,7 +341,7 @@ struct BillDetailView: View {
                 Spacer()
                 Button { confirmDelete = true } label: {
                     Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(Design.danger)
-                        .frame(width: 28, height: 28).background(.white.opacity(0.45), in: Circle())
+                        .frame(width: 28, height: 28).background(Design.ghostFill, in: Circle())
                 }.buttonStyle(.plain).help("删除账单").accessibilityLabel("删除账单")
             }
         }

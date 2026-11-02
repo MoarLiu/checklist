@@ -323,6 +323,7 @@ struct ReminderCard: View {
             }
         }
         .padding(14).frame(width: 272).foregroundStyle(Design.body)
-        .glassCard(radius: 18, thin: false).preferredColorScheme(.light)
+        .glassCard(radius: 18, thin: false)
+        .tint(Design.teal)
     }
 }

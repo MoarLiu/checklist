@@ -3,33 +3,44 @@ import SwiftData
 import SwiftUI
 
 @main
-struct CheckListApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    var body: some Scene {
-        Settings {
-            if let reminders = delegate.reminders {
-                ReminderSettingsView(service: reminders, close: { NSApp.keyWindow?.close() })
-            } else {
-                ProgressView().padding()
-            }
+struct CheckListApp {
+    @MainActor
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        application.delegate = delegate
+        // AppKit owns the window lifecycle; SwiftUI only renders hosted views.
+        // Keep the delegate alive because NSApplication holds it weakly.
+        withExtendedLifetime(delegate) {
+            application.run()
         }
     }
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     var store: AppStore?
     var window: NSWindow?
     var statusItem: NSStatusItem?
     var popover = NSPopover()
-    @Published var reminders: ReminderService?
+    var reminders: ReminderService?
     var settingsWindow: NSWindow?
+    private var appearanceObserver: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         do {
             let demo = ProcessInfo.processInfo.arguments.contains("--demo")
             let override = ProcessInfo.processInfo.environment["CHECKLIST_DATA_DIR"]
+            // Process-local appearance overrides are only available for isolated
+            // preview profiles. Normal use always follows the system appearance.
+            if override != nil {
+                switch ProcessInfo.processInfo.environment["CHECKLIST_PREVIEW_APPEARANCE"] {
+                case "light": NSApp.appearance = NSAppearance(named: .aqua)
+                case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+                default: break
+                }
+            }
             let base = override.map { URL(fileURLWithPath: $0, isDirectory: true) } ??
                 FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent(demo ? "CheckList-Demo" : "CheckList", isDirectory: true)
@@ -46,6 +57,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
             setupMainMenu()
             setupStatusItem()
+            appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in
+                    self?.popover.appearance = NSApp.effectiveAppearance
+                }
+            }
             showMainWindow()
             reminders.start()
         } catch {
@@ -89,6 +105,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         guard let button = statusItem?.button else { return }
         if popover.isShown { popover.performClose(nil) }
         else {
+            // The menu-bar anchor can use a different appearance from the app
+            // depending on the wallpaper. Keep the app's popover consistent.
+            popover.appearance = NSApp.effectiveAppearance
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
         }
