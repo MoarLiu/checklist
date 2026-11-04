@@ -84,11 +84,11 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
     func reconcile() async {
         // Retain foreground delivery keys across brief OS delivery races, but bound their lifetime.
         let now = clock()
+        store.now = now
+        store.onClockChange?()
         suppressedNotificationIDs = suppressedNotificationIDs.filter { now.timeIntervalSince($0.value) < 172800 }
         guard await absorbDeliveredNotifications() else { return }
         guard !Task.isCancelled else { return }
-        store.now = now
-        store.onClockChange?()
         if let activeBillID, let bill = store.bill(activeBillID), !bill.isPaid, !bill.isMuted, bill.snoozeUntil == nil {
             // Keep the current card until an explicit action is saved successfully.
         } else if activeBillID != nil { closePanel() }
@@ -193,6 +193,7 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         let saved: Bool
         switch action {
         case .paid: saved = store.setPaid(bill, paid: true)
+        case .nextInstallment: saved = store.advanceInstallment(bill, now: clock())
         case .snooze: saved = store.snooze(bill, now: clock())
         case .mute: saved = store.mute(bill, muted: true)
         }
@@ -283,7 +284,7 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
-enum ReminderAction { case paid, snooze, mute }
+enum ReminderAction { case paid, nextInstallment, snooze, mute }
 
 final class ReminderPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -309,9 +310,18 @@ struct ReminderCard: View {
             Text("¥" + Money.format(bill.amountInCents)).font(.system(size: 20, weight: .semibold))
                 .monospacedDigit().foregroundStyle(Design.ink)
             VStack(spacing: 6) {
-                Button { action(.paid) } label: {
-                    Label("已经还款", systemImage: "checkmark").frame(maxWidth: .infinity)
-                }.buttonStyle(TealButtonStyle())
+                HStack(spacing: 6) {
+                    Button { action(.paid) } label: {
+                        Label("已经还款", systemImage: "checkmark").frame(maxWidth: .infinity)
+                    }.buttonStyle(TealButtonStyle())
+                    if bill.kind == .loan {
+                        Button { action(.nextInstallment) } label: {
+                            Label("下一期", systemImage: "arrow.right")
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                        .help("将本期设为已还款，并复制为下个月的账单")
+                    }
+                }
                 HStack(spacing: 6) {
                     Button { action(.snooze) } label: {
                         Label("稍后再提醒", systemImage: "clock").frame(maxWidth: .infinity)

@@ -32,20 +32,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let demo = ProcessInfo.processInfo.arguments.contains("--demo")
             let override = ProcessInfo.processInfo.environment["CHECKLIST_DATA_DIR"]
-            // Process-local appearance overrides are only available for isolated
-            // preview profiles. Normal use always follows the system appearance.
-            if override != nil {
-                switch ProcessInfo.processInfo.environment["CHECKLIST_PREVIEW_APPEARANCE"] {
-                case "light": NSApp.appearance = NSAppearance(named: .aqua)
-                case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
-                default: break
-                }
-            }
             let base = override.map { URL(fileURLWithPath: $0, isDirectory: true) } ??
                 FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent(demo ? "CheckList-Demo" : "CheckList", isDirectory: true)
-            let store = try AppStore(dataURL: base.appendingPathComponent("bills.store"))
+            let defaults = demo || override != nil ?
+                UserDefaults(suiteName: "app.chuzhangri.CheckList.demo")! : .standard
+            let store = try AppStore(dataURL: base.appendingPathComponent("bills.store"), appearanceDefaults: defaults)
             self.store = store
+            store.appearance.onChange = { theme in
+                NSApp.appearance = NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
+            }
+            let previewTheme = override.flatMap { _ in
+                ProcessInfo.processInfo.environment["CHECKLIST_PREVIEW_APPEARANCE"].flatMap(AppTheme.init(rawValue:))
+            }
+            if let theme = previewTheme ?? store.appearance.theme {
+                NSApp.appearance = NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
+            }
             if demo { store.seedDemo() }
             store.showWindow = { [weak self] in self?.showMainWindow() }
             store.onClockChange = { [weak self] in self?.updateStatus() }
@@ -92,11 +94,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let amount = MenuBarMark.amount(cents: store.total)
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .medium)
         button.font = font
-        button.attributedTitle = NSAttributedString(string: amount, attributes: [.font: font])
+        let countdown = store.countdown.text
+        button.attributedTitle = NSAttributedString(string: amount + " · " + countdown, attributes: [.font: font])
         button.image = MenuBarMark.image
         button.imagePosition = .imageLeading
         button.imageHugsTitle = true
-        button.toolTip = "出账日 · 待还 " + amount
+        button.toolTip = if let nearest = store.pending.first {
+            "出账日 · 待还 \(amount)\n\(nearest.name) · \(nearest.dateText) 到期 · \(countdown)\n以还款日当天结束为截止"
+        } else {
+            "出账日 · 全部账单已还清"
+        }
+        button.setAccessibilityLabel("出账日，待还 \(Money.format(store.total)) 元，\(countdown)")
         popover.contentSize = NSSize(width: 236, height: 144 + min(store.pending.count, 4) * 42)
     }
 

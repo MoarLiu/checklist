@@ -29,6 +29,7 @@ struct ReminderDeliverySnapshot {
 @MainActor @Observable
 final class AppStore {
     let container: ModelContainer
+    let appearance: AppearanceSettings
     var bills: [Bill] = []
     var route: AppRoute = .home
     var detailSource: AppRoute = .home
@@ -42,9 +43,10 @@ final class AppStore {
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private let persist: (ModelContext) throws -> Void
 
-    init(inMemory: Bool = false, dataURL: URL? = nil,
+    init(inMemory: Bool = false, dataURL: URL? = nil, appearanceDefaults: UserDefaults = .standard,
          persist: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         self.persist = persist
+        appearance = AppearanceSettings(defaults: appearanceDefaults)
         let schema = Schema([Bill.self])
         let config: ModelConfiguration
         if let dataURL {
@@ -62,6 +64,7 @@ final class AppStore {
     var history: [Bill] { bills.filter(\.isPaid).sorted { ($0.paidAt ?? $0.createdAt) > ($1.paidAt ?? $1.createdAt) } }
     var total: Int64 { pending.reduce(0) { $0 + $1.amountInCents } }
     var paidTotal: Int64 { history.reduce(0) { $0 + $1.amountInCents } }
+    var countdown: BillCountdown { BillCountdown(dueDate: pending.first?.dueDate, now: now) }
     var dueCount: Int { pending.filter { $0.daysLeft(now: now) == 0 }.count }
     var overdueCount: Int { pending.filter { $0.daysLeft(now: now) < 0 }.count }
 
@@ -120,6 +123,52 @@ final class AppStore {
         bill.reminderGeneration = UUID().uuidString
         guard save() else { return false }
         say(paid ? "已标记为已还款" : "已撤销还款")
+        return true
+    }
+
+    /// Repayment and the next installment are persisted together in one save.
+    @discardableResult
+    func advanceInstallment(_ bill: Bill, now: Date = .now, calendar: Calendar = .current) -> Bool {
+        guard self.bill(bill.id) === bill, bill.kind == .loan, !bill.isPaid else { return false }
+        if let nextID = bill.nextInstallmentID, self.bill(nextID) != nil {
+            errorMessage = "这期账单已生成下一期，请直接查看已有的下一期账单。"
+            return false
+        }
+        guard let due = bill.nextInstallmentDate(calendar: calendar) else {
+            errorMessage = "无法计算下一期还款日期，请检查账单日期。"
+            return false
+        }
+        let next = Bill(kind: bill.kind, name: bill.name, amountInCents: bill.amountInCents,
+                        dueDate: due, now: now, calendar: calendar)
+        next.installmentDay = bill.installmentDay ?? bill.dueDay
+        next.isMuted = bill.isMuted
+        let previousPaidAt = bill.paidAt
+        let previousSnooze = bill.snoozeUntil
+        let previousReminded = bill.lastRemindedAt
+        let previousGeneration = bill.reminderGeneration
+        let previousNextID = bill.nextInstallmentID
+        bill.isPaid = true
+        bill.paidAt = now
+        bill.snoozeUntil = nil
+        bill.lastRemindedAt = nil
+        bill.reminderGeneration = UUID().uuidString
+        bill.nextInstallmentID = next.id
+        context.insert(next)
+        guard save() else {
+            // Restore @Model caches as well as SwiftData's transaction rollback.
+            func restore(_ target: Bill) {
+                target.isPaid = false
+                target.paidAt = previousPaidAt
+                target.snoozeUntil = previousSnooze
+                target.lastRemindedAt = previousReminded
+                target.reminderGeneration = previousGeneration
+                target.nextInstallmentID = previousNextID
+            }
+            restore(bill)
+            if let current = self.bill(bill.id), current !== bill { restore(current) }
+            return false
+        }
+        say("本期已还款，下一期还款日 \(next.dateText)")
         return true
     }
 

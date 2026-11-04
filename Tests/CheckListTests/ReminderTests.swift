@@ -261,4 +261,50 @@ struct ReminderTests {
         service.handleNotificationAction("PAID", billID: bill.id, generation: bill.reminderGeneration)
         #expect(bill.isPaid)
     }
+
+    @Test func nextInstallmentClosesCardAndReplacesOldNotifications() async throws {
+        let store = try AppStore(inMemory: true)
+        store.add(kind: .loan, name: "贷款", cents: 200, due: now)
+        let bill = try #require(store.pending.first)
+        let fake = FakeNotifications()
+        var presented: [UUID] = []
+        let service = ReminderService(store: store, settings: makeSettings(), client: fake,
+                                      clock: { now }, presenter: { presented.append($0.id) })
+        await service.reconcile()
+        let originalRequests = Set(fake.pendingValues.map(\.identifier))
+        #expect(service.activeBillID == bill.id)
+        #expect(service.handle(.nextInstallment, billID: bill.id))
+        #expect(service.activeBillID == nil && bill.isPaid)
+        await service.reconcile()
+        let next = try #require(store.pending.first)
+        #expect(fake.pendingValues.allSatisfy { $0.billID == next.id })
+        #expect(originalRequests.isDisjoint(with: Set(fake.pendingValues.map(\.identifier))))
+        #expect(presented == [bill.id])
+        #expect(!service.handle(.nextInstallment, billID: bill.id))
+        #expect(store.bills.count == 2)
+    }
+
+    @Test func failedNextInstallmentKeepsReminderCardOpenForRetry() async throws {
+        enum Failure: Error { case diskFull }
+        var fail = false
+        let store = try AppStore(inMemory: true, persist: {
+            if fail { throw Failure.diskFull }
+            try $0.save()
+        })
+        store.add(kind: .loan, name: "贷款", cents: 100, due: now)
+        let bill = try #require(store.pending.first)
+        let service = ReminderService(store: store, settings: makeSettings(), systemNotificationsEnabled: false,
+                                      clock: { now }, presenter: { _ in })
+        await service.reconcile()
+        let deliveredAt = bill.lastRemindedAt
+        fail = true
+        #expect(!service.handle(.nextInstallment, billID: bill.id))
+        #expect(service.activeBillID == bill.id)
+        #expect(!bill.isPaid && bill.lastRemindedAt == deliveredAt)
+        #expect(store.bills.count == 1)
+        fail = false
+        #expect(service.handle(.nextInstallment, billID: bill.id))
+        #expect(service.activeBillID == nil)
+        #expect(store.bills.count == 2)
+    }
 }

@@ -28,6 +28,10 @@ final class Bill {
     // Invalidates notifications from before a payment, mute or snooze change.
     // A literal default permits lightweight migration of existing local stores.
     var reminderGeneration: String = ""
+    // Optional defaults allow existing stores to migrate without losing bills.
+    // Keep the original day through short months (Jan 31 → Feb 28 → Mar 31).
+    var installmentDay: Int? = nil
+    var nextInstallmentID: UUID? = nil
 
     init(kind: BillKind, name: String, amountInCents: Int64, dueDate: Date, now: Date = .now, calendar: Calendar = .current) {
         self.id = UUID()
@@ -56,6 +60,15 @@ final class Bill {
 
     func daysLeft(now: Date = .now, calendar: Calendar = .current) -> Int {
         calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: dueDate(in: calendar)).day ?? 0
+    }
+
+    func nextInstallmentDate(calendar: Calendar = .current) -> Date? {
+        guard let monthStart = calendar.date(from: DateComponents(year: dueYear, month: dueMonth, day: 1)),
+              let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart),
+              let days = calendar.range(of: .day, in: .month, for: nextMonth) else { return nil }
+        var parts = calendar.dateComponents([.era, .year, .month], from: nextMonth)
+        parts.day = min(max(1, installmentDay ?? dueDay), days.count)
+        return calendar.date(from: parts)
     }
 
     /// A persisted daily delivery marker prevents timer/wake/notification races.

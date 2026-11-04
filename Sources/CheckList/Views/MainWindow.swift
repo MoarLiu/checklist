@@ -4,6 +4,7 @@ struct RootView: View {
     @Bindable var store: AppStore
     let settings: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 0) {
@@ -72,10 +73,23 @@ struct RootView: View {
             Text("常驻菜单栏，到期日当天\n弹窗并伴随提示音提醒。")
                 .font(.system(size: 10)).foregroundStyle(Design.secondary).lineSpacing(4)
                 .padding(12).frame(maxWidth: .infinity, alignment: .leading).glassCard()
-            Button(action: settings) {
-                Label("提醒设置", systemImage: "gearshape").font(.system(size: 10))
+            HStack {
+                Button(action: settings) {
+                    Label("提醒设置", systemImage: "gearshape").font(.system(size: 10))
+                }
+                .buttonStyle(.plain).foregroundStyle(Design.secondary)
+                Spacer()
+                Button { store.appearance.toggle(isDark: colorScheme == .dark) } label: {
+                    Image(systemName: colorScheme == .dark ? "sun.max" : "moon")
+                        .font(.system(size: 12)).frame(width: 28, height: 24)
+                }
+                .buttonStyle(.plain).foregroundStyle(Design.ink)
+                .background(Design.ghostFill, in: Capsule())
+                .help(colorScheme == .dark ? "切换为浅色模式" : "切换为深色模式")
+                .accessibilityLabel(colorScheme == .dark ? "切换为浅色模式" : "切换为深色模式")
+                .accessibilityIdentifier("appearanceToggle")
             }
-            .buttonStyle(.plain).foregroundStyle(Design.secondary).padding(.top, 12)
+            .padding(.top, 12)
         }
         .padding(16).frame(width: 176, height: 520)
         .background(Design.sidebarFill)
@@ -105,25 +119,15 @@ struct RootView: View {
 
 struct HomeView: View {
     @Bindable var store: AppStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("本期待还总额").font(.system(size: 12)).foregroundStyle(Design.secondary)
-                    HStack(alignment: .top, spacing: 4) {
-                        Text("¥").font(.system(size: 20, weight: .semibold)).padding(.top, 5)
-                            .foregroundStyle(Design.currency)
-                        CountingAmount(cents: Double(store.total)).font(.system(size: 46, weight: .semibold))
-                            .tracking(-0.9).foregroundStyle(Design.ink)
-                            .animation(reduceMotion ? nil : .easeOut(duration: 0.8), value: store.total)
-                            .minimumScaleFactor(0.5).lineLimit(1)
-                    }
+                BillAmountSummary(title: "本期待还总额", cents: store.total) {
                     HStack(spacing: 6) {
                         Text("共 \(store.pending.count) 笔未还")
                         if store.dueCount > 0 { Text("· \(store.dueCount) 笔今天到期").foregroundStyle(Design.todayText) }
                         if store.overdueCount > 0 { Text("· \(store.overdueCount) 笔逾期").foregroundStyle(Design.danger) }
-                    }.font(.system(size: 12)).foregroundStyle(Design.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
                 Button { store.route = .add } label: { Label("记一笔", systemImage: "plus") }
@@ -138,6 +142,28 @@ struct HomeView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+struct BillAmountSummary<Detail: View>: View {
+    let title: String
+    let cents: Int64
+    @ViewBuilder let detail: () -> Detail
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 12)).foregroundStyle(Design.secondary)
+            HStack(alignment: .top, spacing: 4) {
+                Text("¥").font(.system(size: 20, weight: .semibold)).padding(.top, 5)
+                    .foregroundStyle(Design.currency)
+                CountingAmount(cents: Double(cents)).font(.system(size: 46, weight: .semibold))
+                    .tracking(-0.9).foregroundStyle(Design.ink)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.8), value: cents)
+                    .minimumScaleFactor(0.5).lineLimit(1)
+            }
+            detail().font(.system(size: 12)).foregroundStyle(Design.secondary)
         }
     }
 }
@@ -175,10 +201,8 @@ struct HistoryView: View {
     @Bindable var store: AppStore
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("已还清").font(.system(size: 20, weight: .semibold))
-                Text("累计已还 ¥" + Money.format(store.paidTotal)).font(.system(size: 12))
-                    .foregroundStyle(Design.secondary)
+            BillAmountSummary(title: "累计已还总额", cents: store.paidTotal) {
+                Text("共 \(store.history.count) 笔已还清")
             }
             if store.history.isEmpty {
                 EmptyState(title: "还没有已还清的账单", subtitle: "完成还款后，会在这里留下记录", symbol: "checkmark")
@@ -335,6 +359,15 @@ struct BillDetailView: View {
                     Button { if store.setPaid(bill, paid: true) { store.route = .home } } label: {
                         Label("设为已经还款", systemImage: "checkmark")
                     }.buttonStyle(TealButtonStyle())
+                    if bill.kind == .loan {
+                        Button {
+                            if store.advanceInstallment(bill) { store.route = .home }
+                        } label: {
+                            Label("下一期", systemImage: "arrow.right")
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                        .help("将本期设为已还款，并复制为下个月的账单")
+                    }
                     Button(bill.isMuted ? "开启提醒" : "不再提醒") { store.mute(bill, muted: !bill.isMuted) }
                         .buttonStyle(GhostButtonStyle())
                 }
