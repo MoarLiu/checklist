@@ -16,12 +16,15 @@ struct Version020Tests {
         calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
     }
 
-    @Test func countdownUsesEntireDueDayAndRoundsUp() {
+    @Test func countdownUsesWholeDaysAndRoundsUpHours() {
         let cal = calendar()
         let due = date(2026, 11, 4, calendar: cal)
         #expect(BillCountdown(dueDate: nil, now: due, calendar: cal).text == "已还清")
-        #expect(BillCountdown(dueDate: due, now: date(2026, 11, 2, 23, 59, calendar: cal), calendar: cal) == .days(3))
-        #expect(BillCountdown(dueDate: due, now: date(2026, 11, 3, 23, 59, calendar: cal), calendar: cal) == .days(2))
+        #expect(BillCountdown(dueDate: due, now: date(2026, 11, 2, 23, 59, calendar: cal), calendar: cal) == .days(2))
+        #expect(BillCountdown(dueDate: due, now: date(2026, 11, 2, calendar: cal), calendar: cal) == .days(3))
+        #expect(BillCountdown(dueDate: due, now: date(2026, 11, 3, 4, calendar: cal), calendar: cal) == .days(1))
+        #expect(BillCountdown(dueDate: due, now: date(2026, 11, 3, calendar: cal), calendar: cal) == .days(2))
+        #expect(BillCountdown(dueDate: due, now: date(2026, 11, 3, 23, 59, calendar: cal), calendar: cal) == .days(1))
         #expect(BillCountdown(dueDate: due, now: due, calendar: cal) == .days(1))
         #expect(BillCountdown(dueDate: due, now: date(2026, 11, 4, 0, 1, calendar: cal), calendar: cal).text == "剩 24 小时")
         #expect(BillCountdown(dueDate: due, now: date(2026, 11, 4, 12, calendar: cal), calendar: cal) == .hours(12))

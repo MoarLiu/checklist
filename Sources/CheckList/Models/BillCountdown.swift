@@ -18,7 +18,7 @@ enum BillCountdown: Equatable {
         let deadline = calendar.date(byAdding: .day, value: 1, to: dueDay) ?? dueDay
         let seconds = max(0, deadline.timeIntervalSince(now))
         if seconds >= 86_400 {
-            self = .days(Int(ceil(seconds / 86_400)))
+            self = .days(Int(seconds / 86_400))
         } else {
             self = .hours(max(1, Int(ceil(seconds / 3_600))))
         }
