@@ -78,6 +78,23 @@ struct BillTests {
         #expect(calendar().component(.day, from: bill.dueDate(in: calendar())) == 31)
     }
 
+    @Test func overdueBillWaitsForReminderTimeAfterEarlierDelivery() throws {
+        let cal = calendar()
+        let bill = Bill(kind: .creditCard, name: "逾期", amountInCents: 100, dueDate: date(calendar: cal), calendar: cal)
+        bill.lastRemindedAt = date(2026, 11, 2, 9, calendar: cal)
+        // Just after midnight the next delivery is still today's reminder time.
+        #expect(bill.nextReminder(now: date(2026, 11, 3, 0, 30, calendar: cal), hour: 9, minute: 0, calendar: cal) ==
+                date(2026, 11, 3, 9, calendar: cal))
+        // Once that time has passed, the bill is due at once.
+        let ten = date(2026, 11, 3, 10, calendar: cal)
+        #expect(try #require(bill.nextReminder(now: ten, hour: 9, minute: 0, calendar: cal)) <= ten)
+        bill.lastRemindedAt = ten
+        #expect(bill.nextReminder(now: ten, hour: 9, minute: 0, calendar: cal) == date(2026, 11, 4, 9, calendar: cal))
+        // Days without a delivery (the app was closed) do not bring back the midnight card.
+        #expect(bill.nextReminder(now: date(2026, 11, 6, 7, calendar: cal), hour: 9, minute: 0, calendar: cal) ==
+                date(2026, 11, 6, 9, calendar: cal))
+    }
+
     @Test func persistedStateTransitions() throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: base) }

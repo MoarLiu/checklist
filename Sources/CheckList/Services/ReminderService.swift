@@ -11,11 +11,10 @@ final class ReminderSettings {
     var sound: Bool { didSet { defaults.set(sound, forKey: "reminderSound") } }
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        hour = defaults.object(forKey: "reminderHour") as? Int ?? 9
-        minute = defaults.integer(forKey: "reminderMinute")
+        // Clamp once, so construction does not count as an edit and write defaults back.
+        hour = min(23, max(0, defaults.object(forKey: "reminderHour") as? Int ?? 9))
+        minute = min(59, max(0, defaults.integer(forKey: "reminderMinute")))
         sound = defaults.object(forKey: "reminderSound") as? Bool ?? true
-        hour = min(23, max(0, hour))
-        minute = min(59, max(0, minute))
     }
 }
 

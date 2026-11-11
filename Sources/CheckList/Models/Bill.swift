@@ -84,7 +84,12 @@ final class Bill {
             let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
             return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow)
         }
-        if due < today { return now }
+        if due < today {
+            // Never delivered (the app was closed on the due day): catch up at once.
+            // Delivered on an earlier day: wait for today's reminder time, not midnight.
+            guard lastRemindedAt != nil else { return now }
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: today) ?? now
+        }
         return max(dueTime, now)
     }
 }

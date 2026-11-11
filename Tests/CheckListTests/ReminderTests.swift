@@ -231,6 +231,29 @@ struct ReminderTests {
         #expect(service.activeBillID == nil)
     }
 
+    @Test func overdueCardWaitsForReminderTimeInsteadOfMidnight() async throws {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: now)
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+        let store = try makeStore(due: yesterday)
+        let bill = try #require(store.bills.first)
+        bill.lastRemindedAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: yesterday)!
+        #expect(store.save())
+        let nine = cal.date(bySettingHour: 9, minute: 0, second: 0, of: today)!
+        var current = today.addingTimeInterval(30 * 60)
+        let fake = FakeNotifications()
+        var presented: [UUID] = []
+        let service = ReminderService(store: store, settings: makeSettings(), client: fake,
+                                      clock: { current }, presenter: { presented.append($0.id) })
+        await service.reconcile()
+        #expect(presented.isEmpty)
+        // Today's system notification stays scheduled for the configured time.
+        #expect(fake.pendingValues.map(\.date).min() == nine)
+        current = nine
+        await service.reconcile()
+        #expect(presented == [bill.id])
+    }
+
     @Test func plannerReservesFirstNotificationForEachBill() throws {
         let store = try AppStore(inMemory: true)
         for offset in 0..<10 {

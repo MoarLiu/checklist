@@ -3,6 +3,16 @@ import SwiftData
 import Testing
 @testable import CheckList
 
+/// In-memory defaults. A real suite leaves a plist in ~/Library/Preferences after every
+/// run: the preferences daemon writes it back once the test process has exited.
+final class MemoryDefaults: UserDefaults, @unchecked Sendable {
+    private var values: [String: Any] = [:]
+    init() { super.init(suiteName: nil)! }
+    override func object(forKey defaultName: String) -> Any? { values[defaultName] }
+    override func string(forKey defaultName: String) -> String? { values[defaultName] as? String }
+    override func set(_ value: Any?, forKey defaultName: String) { values[defaultName] = value }
+}
+
 @Suite(.serialized) @MainActor
 struct Version020Tests {
     func calendar(_ zone: String = "Asia/Shanghai") -> Calendar {
@@ -161,9 +171,7 @@ struct Version020Tests {
     }
 
     @Test func appearanceStartsWithSystemAndPersistsBothChoices() throws {
-        let suite = "CheckList.Tests.Appearance.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = MemoryDefaults()
         let appearance = AppearanceSettings(defaults: defaults)
         #expect(appearance.theme == nil)
         var applied: [AppTheme] = []

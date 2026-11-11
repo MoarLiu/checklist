@@ -82,9 +82,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.action = #selector(togglePopover)
         popover.behavior = .transient
         if let store {
-            popover.contentViewController = NSHostingController(rootView:
+            let content = NSHostingController(rootView:
                 MenuBarPopover(store: store, settings: { [weak self] in self?.showSettings() },
                                quit: { NSApp.terminate(nil) }))
+            // Let the SwiftUI content size the popover, including the taller empty state.
+            content.sizingOptions = [.preferredContentSize]
+            popover.contentViewController = content
         }
         updateStatus()
     }
@@ -105,7 +108,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "出账日 · 全部账单已还清"
         }
         button.setAccessibilityLabel("出账日，待还 \(Money.format(store.total)) 元，\(countdown)")
-        popover.contentSize = NSSize(width: 236, height: 144 + min(store.pending.count, 4) * 42)
     }
 
     @objc func togglePopover() {
