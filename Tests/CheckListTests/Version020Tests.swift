@@ -7,10 +7,15 @@ import Testing
 /// run: the preferences daemon writes it back once the test process has exited.
 final class MemoryDefaults: UserDefaults, @unchecked Sendable {
     private var values: [String: Any] = [:]
+    var storedKeys: [String] { values.keys.sorted() }
     init() { super.init(suiteName: nil)! }
     override func object(forKey defaultName: String) -> Any? { values[defaultName] }
     override func string(forKey defaultName: String) -> String? { values[defaultName] as? String }
+    override func integer(forKey defaultName: String) -> Int { values[defaultName] as? Int ?? 0 }
+    override func bool(forKey defaultName: String) -> Bool { values[defaultName] as? Bool ?? false }
     override func set(_ value: Any?, forKey defaultName: String) { values[defaultName] = value }
+    override func set(_ value: Int, forKey defaultName: String) { values[defaultName] = value }
+    override func set(_ value: Bool, forKey defaultName: String) { values[defaultName] = value }
 }
 
 @Suite(.serialized) @MainActor

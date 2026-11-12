@@ -42,9 +42,8 @@ final class FakeNotifications: NotificationClient {
 @Suite(.serialized) @MainActor
 struct ReminderTests {
     func makeSettings() -> ReminderSettings {
-        let defaults = UserDefaults(suiteName: "CheckList.Tests")!
-        defaults.removePersistentDomain(forName: "CheckList.Tests")
-        return ReminderSettings(defaults: defaults)
+        // In memory, so a test that changes a setting cannot leave a plist behind.
+        ReminderSettings(defaults: MemoryDefaults())
     }
     var now: Date {
         Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 2, hour: 12))!

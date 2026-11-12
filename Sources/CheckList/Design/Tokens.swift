@@ -57,6 +57,10 @@ enum Design {
     static let ghostFill = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.45, darkAlpha: 0.07)
     static let ghostPressed = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.7, darkAlpha: 0.14)
     static let ghostBorder = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.7, darkAlpha: 0.16)
+    // A tinted secondary button: white-on-white ghosts vanish on bright glass such as the reminder card.
+    static let ghostStrongFill = Color.adaptive(0x0FBFA0, dark: 0x3FF0CD, lightAlpha: 0.14, darkAlpha: 0.16)
+    static let ghostStrongPressed = Color.adaptive(0x0FBFA0, dark: 0x3FF0CD, lightAlpha: 0.26, darkAlpha: 0.28)
+    static let ghostStrongBorder = Color.adaptive(0x0F766E, dark: 0x5EEAD4, lightAlpha: 0.32, darkAlpha: 0.4)
     static let sidebarFill = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.1, darkAlpha: 0.025)
     static let sidebarDivider = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.5, darkAlpha: 0.1)
     static let selectionFill = Color.adaptive(0xFFFFFF, dark: 0x3FF0CD, lightAlpha: 0.7, darkAlpha: 0.14)
@@ -122,15 +126,54 @@ struct TealButtonStyle: ButtonStyle {
 
 struct GhostButtonStyle: ButtonStyle {
     var height: CGFloat = 28
+    /// Tinted, for bright surfaces where the plain ghost has too little contrast.
+    var strong = false
+    @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
+        let fill = strong ? (configuration.isPressed ? Design.ghostStrongPressed : Design.ghostStrongFill) :
+            (configuration.isPressed ? Design.ghostPressed : Design.ghostFill)
         configuration.label
             .font(.system(size: 11, weight: .medium))
             .padding(.horizontal, 12)
             .frame(height: height)
             .foregroundStyle(Design.ink)
-            .background(configuration.isPressed ? Design.ghostPressed : Design.ghostFill, in: Capsule())
-            .overlay(Capsule().strokeBorder(Design.ghostBorder, lineWidth: 1))
+            .background(fill, in: Capsule())
+            .overlay(Capsule().strokeBorder(strong ? Design.ghostStrongBorder : Design.ghostBorder, lineWidth: 1))
+            .opacity(enabled ? 1 : 0.4)
             .contentShape(Capsule())
+    }
+}
+
+/// Where a bill stands against its due date, as one set of colors for every surface.
+enum DueStyle {
+    case paid, overdue, today, soon, future
+
+    init(bill: Bill, now: Date = .now) {
+        if bill.isPaid { self = .paid; return }
+        self.init(daysLeft: bill.daysLeft(now: now))
+    }
+
+    init(daysLeft days: Int) {
+        self = days < 0 ? .overdue : days == 0 ? .today : days <= 3 ? .soon : .future
+    }
+
+    var text: Color {
+        switch self {
+        case .paid, .future: Design.futureText
+        case .overdue: Design.overdueText
+        case .today: Design.todayText
+        case .soon: Design.soonText
+        }
+    }
+
+    var fill: Color {
+        switch self {
+        case .paid: Design.paidFill
+        case .overdue: Design.overdueFill
+        case .today: Design.todayFill
+        case .soon: Design.soonFill
+        case .future: Design.futureFill
+        }
     }
 }
 
@@ -155,24 +198,11 @@ struct KindIcon: View {
 struct DueBadge: View {
     let bill: Bill
     var now = Date()
-    private var days: Int { bill.daysLeft(now: now) }
-    private var color: Color {
-        if bill.isPaid { return Design.futureText }
-        return days < 0 ? Design.overdueText : days == 0 ? Design.todayText :
-            days <= 3 ? Design.soonText : Design.futureText
-    }
-    private var fill: Color {
-        if bill.isPaid { return Design.paidFill }
-        return days < 0 ? Design.overdueFill : days == 0 ? Design.todayFill :
-            days <= 3 ? Design.soonFill : Design.futureFill
-    }
-    private var text: String {
-        bill.isPaid ? "已还款" : days < 0 ? "逾期 \(-days) 天" : days == 0 ? "今天到期" : "\(days) 天后"
-    }
     var body: some View {
-        Text(text).font(.system(size: 10, weight: .medium))
-            .foregroundStyle(color).padding(.horizontal, 10).padding(.vertical, 4)
-            .background(fill, in: Capsule()).fixedSize()
+        let style = DueStyle(bill: bill, now: now)
+        Text(bill.statusText(now: now)).font(.system(size: 10, weight: .medium))
+            .foregroundStyle(style.text).padding(.horizontal, 10).padding(.vertical, 4)
+            .background(style.fill, in: Capsule()).fixedSize()
     }
 }
 

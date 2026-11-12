@@ -54,6 +54,24 @@ final class Bill {
     var dateText: String { String(format: "%04d-%02d-%02d", dueYear, dueMonth, dueDay) }
     var amount: Decimal { Decimal(amountInCents) / 100 }
 
+    /// When the bill was repaid, in the same civil form as the due date.
+    var paidText: String? {
+        guard let paidAt else { return nil }
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: paidAt)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    /// One vocabulary for due status, shared by the list, the menu bar and the reminder card.
+    func statusText(now: Date = .now, calendar: Calendar = .current) -> String {
+        isPaid ? "已还款" : Self.statusText(daysLeft: daysLeft(now: now, calendar: calendar))
+    }
+
+    static func statusText(daysLeft days: Int) -> String {
+        if days < 0 { return "逾期 \(-days) 天" }
+        if days == 0 { return "今天到期" }
+        return "剩 \(days) 天"
+    }
+
     func dueDate(in calendar: Calendar) -> Date {
         calendar.date(from: DateComponents(year: dueYear, month: dueMonth, day: dueDay)) ?? .distantFuture
     }
@@ -62,13 +80,19 @@ final class Bill {
         calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: dueDate(in: calendar)).day ?? 0
     }
 
-    func nextInstallmentDate(calendar: Calendar = .current) -> Date? {
-        guard let monthStart = calendar.date(from: DateComponents(year: dueYear, month: dueMonth, day: 1)),
+    /// The same day one month later, clamped to that month's last day (Jan 31 → Feb 28).
+    static func monthAfter(_ date: Date, day: Int? = nil, calendar: Calendar = .current) -> Date? {
+        guard let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: date)),
               let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart),
               let days = calendar.range(of: .day, in: .month, for: nextMonth) else { return nil }
         var parts = calendar.dateComponents([.era, .year, .month], from: nextMonth)
-        parts.day = min(max(1, installmentDay ?? dueDay), days.count)
+        parts.day = min(max(1, day ?? calendar.component(.day, from: date)), days.count)
         return calendar.date(from: parts)
+    }
+
+    func nextInstallmentDate(calendar: Calendar = .current) -> Date? {
+        guard let monthStart = calendar.date(from: DateComponents(year: dueYear, month: dueMonth, day: 1)) else { return nil }
+        return Self.monthAfter(monthStart, day: installmentDay ?? dueDay, calendar: calendar)
     }
 
     /// A persisted daily delivery marker prevents timer/wake/notification races.
@@ -98,11 +122,22 @@ enum Money {
     static let maximumCents: Int64 = 99_999_999_999
 
     static func parse(_ text: String) -> Int64? {
-        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clean = normalized(text)
         guard clean.range(of: #"^[0-9]{1,9}(\.[0-9]{1,2})?$"#, options: .regularExpression) != nil,
               let value = Decimal(string: clean, locale: Locale(identifier: "en_US_POSIX")) else { return nil }
         let cents = NSDecimalNumber(decimal: value * 100).int64Value
         return cents > 0 && cents <= maximumCents ? cents : nil
+    }
+
+    /// Full-width digits and full stop, as a Chinese keyboard produces them.
+    private static func normalized(_ text: String) -> String {
+        String(text.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.map { scalar in
+            switch scalar.value {
+            case 0xFF10...0xFF19: return Character(UnicodeScalar(scalar.value - 0xFF10 + 0x30)!)
+            case 0xFF0E: return "."
+            default: return Character(scalar)
+            }
+        })
     }
 
     static func format(_ cents: Int64, fraction: Bool = true) -> String {
@@ -112,5 +147,10 @@ enum Money {
         formatter.minimumFractionDigits = fraction ? 2 : 0
         formatter.maximumFractionDigits = fraction ? 2 : 0
         return formatter.string(from: NSDecimalNumber(decimal: Decimal(cents) / 100)) ?? "0.00"
+    }
+
+    /// Without grouping separators, as `parse` accepts it: the starting text of an amount field.
+    static func plain(_ cents: Int64) -> String {
+        String(format: "%lld.%02lld", cents / 100, cents % 100)
     }
 }

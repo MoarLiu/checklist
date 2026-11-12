@@ -9,12 +9,42 @@ final class ReminderSettings {
     var hour: Int { didSet { defaults.set(hour, forKey: "reminderHour") } }
     var minute: Int { didSet { defaults.set(minute, forKey: "reminderMinute") } }
     var sound: Bool { didSet { defaults.set(sound, forKey: "reminderSound") } }
+    /// The first-run hint to allow system notifications is shown until it is answered once.
+    var permissionPromptDismissed: Bool {
+        didSet { defaults.set(permissionPromptDismissed, forKey: "permissionPromptDismissed") }
+    }
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         // Clamp once, so construction does not count as an edit and write defaults back.
         hour = min(23, max(0, defaults.object(forKey: "reminderHour") as? Int ?? 9))
         minute = min(59, max(0, defaults.integer(forKey: "reminderMinute")))
         sound = defaults.object(forKey: "reminderSound") as? Bool ?? true
+        permissionPromptDismissed = defaults.bool(forKey: "permissionPromptDismissed")
+    }
+}
+
+struct SnoozeChoice: Equatable {
+    let title: String
+    let date: Date
+    /// Shown in the toast once the choice is saved.
+    let confirmation: String
+}
+
+enum SnoozeOptions {
+    /// "Tonight" is offered only while 20:00 is later than the one-hour choice.
+    static func make(now: Date, hour: Int, minute: Int, calendar: Calendar = .current) -> [SnoozeChoice] {
+        let inAnHour = now.addingTimeInterval(3600)
+        var choices = [SnoozeChoice(title: "1 小时后", date: inAnHour, confirmation: "1 小时后再提醒你")]
+        let today = calendar.startOfDay(for: now)
+        if let tonight = calendar.date(bySettingHour: 20, minute: 0, second: 0, of: today), tonight > inAnHour {
+            choices.append(SnoozeChoice(title: "今晚 20:00", date: tonight, confirmation: "今晚 20:00 再提醒你"))
+        }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: today),
+           let morning = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow) {
+            let time = String(format: "%02d:%02d", hour, minute)
+            choices.append(SnoozeChoice(title: "明天 \(time)", date: morning, confirmation: "明天 \(time) 再提醒你"))
+        }
+        return choices
     }
 }
 
@@ -23,6 +53,8 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
     let store: AppStore
     var settings: ReminderSettings
     var permission = NotificationPermission.notDetermined
+    /// False until the system has answered once, so the UI does not flash "not enabled" at launch.
+    private(set) var permissionChecked = false
     var authorization = "尚未开启系统通知"
     var schedulingError: String?
     let systemNotificationsEnabled: Bool
@@ -32,6 +64,7 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var panel: NSPanel?
+    @ObservationIgnored private var panelSizeObserver: NSKeyValueObservation?
     private(set) var activeBillID: UUID?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var suppressedNotificationIDs: [String: Date] = [:]
@@ -157,6 +190,7 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         let permission = await client.permission()
         guard !Task.isCancelled else { return }
         self.permission = permission
+        permissionChecked = true
         let allowed = permission == .allowed
         authorization = allowed ? "系统通知已开启" : permission == .denied ?
             "系统通知已关闭，应用运行时仍会弹窗" : "尚未开启系统通知"
@@ -194,7 +228,12 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         case .paid: saved = store.setPaid(bill, paid: true)
         case .nextInstallment: saved = store.advanceInstallment(bill, now: clock())
         case .snooze: saved = store.snooze(bill, now: clock())
+        case .snoozeUntil(let choice): saved = store.snooze(bill, until: choice.date, message: choice.confirmation)
         case .mute: saved = store.mute(bill, muted: true)
+        case .dismiss:
+            // Nothing to save: the delivery marker already keeps this bill quiet until its next reminder.
+            if activeBillID == billID { dismissCard() }
+            return true
         }
         if saved {
             if activeBillID == billID { closePanel() }
@@ -203,6 +242,25 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
             store.showWindow?()
         }
         return saved
+    }
+
+    /// Hides the card without changing the bill, and lets the next due bill take its place.
+    func dismissCard() {
+        closePanel()
+        refresh()
+    }
+
+    /// Other bills that are already due and wait behind the card on screen.
+    func queuedCount(excluding id: UUID) -> Int {
+        let now = clock()
+        return store.pending.filter { bill in
+            bill.id != id &&
+                (bill.nextReminder(now: now, hour: settings.hour, minute: settings.minute) ?? .distantFuture) <= now
+        }.count
+    }
+
+    func snoozeChoices() -> [SnoozeChoice] {
+        SnoozeOptions.make(now: clock(), hour: settings.hour, minute: settings.minute)
     }
 
     func preview() {
@@ -223,13 +281,27 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: ReminderCard(bill: bill, preview: preview) { [weak self] action in
+        let billID = bill.id
+        let card = ReminderCard(
+            bill: bill, preview: preview,
+            queued: { [weak self] in preview ? 0 : (self?.queuedCount(excluding: billID) ?? 0) },
+            snoozeChoices: { [weak self] in self?.snoozeChoices() ?? [] }
+        ) { [weak self] action in
             guard let self else { return }
             if preview { closePanel(); store.say("测试提醒已关闭"); refresh(); return }
-            _ = handle(action, billID: bill.id)
-        })
+            _ = handle(action, billID: billID)
+        }
+        // The card decides its own height: the queue line and the loan button come and go.
+        let host = NSHostingController(rootView: card)
+        host.sizingOptions = [.preferredContentSize]
+        panel.contentViewController = host
+        panel.setContentSize(host.view.fittingSize)
         if let screen = NSScreen.main ?? NSScreen.screens.first {
-            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - 284, y: screen.visibleFrame.maxY - 186))
+            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - panel.frame.width - 12,
+                                         y: screen.visibleFrame.maxY - panel.frame.height - 8))
+        }
+        panelSizeObserver = host.observe(\.preferredContentSize, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.fitPanel() }
         }
         self.panel = panel
         if preview { panel.makeKeyAndOrderFront(nil) }
@@ -237,7 +309,19 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         if settings.sound { NSSound(named: "Glass")?.play() }
     }
 
+    /// Follows a change in the card's height while keeping its top-right corner in place.
+    private func fitPanel() {
+        guard let panel, let size = panel.contentViewController?.preferredContentSize,
+              size.width > 0, size.height > 0, size != panel.contentLayoutRect.size else { return }
+        let top = panel.frame.maxY
+        let right = panel.frame.maxX
+        panel.setContentSize(size)
+        panel.setFrameOrigin(NSPoint(x: right - panel.frame.width, y: top - panel.frame.height))
+    }
+
     private func closePanel() {
+        panelSizeObserver?.invalidate()
+        panelSizeObserver = nil
         panel?.orderOut(nil)
         panel = nil
         activeBillID = nil
@@ -283,28 +367,67 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
-enum ReminderAction { case paid, nextInstallment, snooze, mute }
+enum ReminderAction {
+    case paid, nextInstallment, snooze, snoozeUntil(SnoozeChoice), mute, dismiss
+}
 
 final class ReminderPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+/// A native pop-up menu, for a choice that should not change the layout it is opened from.
+@MainActor
+enum PopUpMenu {
+    private final class Target: NSObject {
+        let handler: () -> Void
+        init(_ handler: @escaping () -> Void) { self.handler = handler }
+        @objc func run() { handler() }
+    }
+
+    static func show(_ entries: [(title: String, handler: () -> Void)]) {
+        let menu = NSMenu()
+        for entry in entries {
+            let target = Target(entry.handler)
+            let item = NSMenuItem(title: entry.title, action: #selector(Target.run), keyEquivalent: "")
+            item.target = target
+            // NSMenuItem holds its target weakly; the represented object keeps it alive.
+            item.representedObject = target
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+}
+
 struct ReminderCard: View {
     let bill: Bill
     let preview: Bool
+    var queued: () -> Int = { 0 }
+    var snoozeChoices: () -> [SnoozeChoice] = { [] }
     let action: (ReminderAction) -> Void
+
     var body: some View {
+        let waiting = queued()
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "bell").font(.system(size: 14))
                     .foregroundStyle(Design.darkTeal).frame(width: 28, height: 28)
                     .background(Design.accent, in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(preview ? "出账日 · 测试提醒" : "出账日 · 现在")
-                        .font(.system(size: 10)).foregroundStyle(Design.secondary)
-                    Text("\(bill.name) \(bill.daysLeft() < 0 ? "已逾期" : "今天到期")")
+                    Text(preview ? "出账日 · 测试提醒" : "出账日 · 还款日 \(bill.dateText)")
+                        .font(.system(size: 10)).foregroundStyle(Design.secondary).lineLimit(1)
+                    Text("\(bill.name) · \(bill.statusText())")
                         .font(.system(size: 12, weight: .semibold)).lineLimit(1)
                 }
+                Spacer(minLength: 0)
+                Button { action(.dismiss) } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Design.secondary).frame(width: 20, height: 20)
+                        .background(Design.ghostStrongFill, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("收起，到下次提醒时间再弹出")
+                .accessibilityLabel("收起提醒")
             }
             Text("¥" + Money.format(bill.amountInCents)).font(.system(size: 20, weight: .semibold))
                 .monospacedDigit().foregroundStyle(Design.ink)
@@ -317,22 +440,38 @@ struct ReminderCard: View {
                         Button { action(.nextInstallment) } label: {
                             Label("下一期", systemImage: "arrow.right")
                         }
-                        .buttonStyle(GhostButtonStyle())
+                        .buttonStyle(GhostButtonStyle(strong: true))
                         .help("将本期设为已还款，并复制为下个月的账单")
                     }
                 }
                 HStack(spacing: 6) {
-                    Button { action(.snooze) } label: {
-                        Label("稍后再提醒", systemImage: "clock").frame(maxWidth: .infinity)
+                    Button { showSnoozeMenu() } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock")
+                            Text("稍后提醒")
+                            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                        }.frame(maxWidth: .infinity)
                     }
+                    .accessibilityLabel("稍后提醒")
+                    .accessibilityHint("选择 1 小时后、今晚或明天")
                     Button { action(.mute) } label: {
                         Label("不再提醒", systemImage: "bell.slash").frame(maxWidth: .infinity)
                     }
-                }.buttonStyle(GhostButtonStyle())
+                }.buttonStyle(GhostButtonStyle(strong: true))
+            }
+            if waiting > 0 {
+                Text("还有 \(waiting) 笔待处理").font(.system(size: 10))
+                    .foregroundStyle(Design.secondary).frame(maxWidth: .infinity)
             }
         }
         .padding(14).frame(width: 272).foregroundStyle(Design.body)
         .glassCard(radius: 18, thin: false)
         .tint(Design.teal)
+    }
+
+    private func showSnoozeMenu() {
+        let choices = snoozeChoices()
+        guard !choices.isEmpty else { action(.snooze); return }
+        PopUpMenu.show(choices.map { choice in (choice.title, { action(.snoozeUntil(choice)) }) })
     }
 }

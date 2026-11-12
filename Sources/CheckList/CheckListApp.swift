@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store.appearance.onChange = { theme in
                 NSApp.appearance = NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
             }
+            store.appearance.onDisplayChange = { [weak self] in self?.updateStatus() }
             let previewTheme = override.flatMap { _ in
                 ProcessInfo.processInfo.environment["CHECKLIST_PREVIEW_APPEARANCE"].flatMap(AppTheme.init(rawValue:))
             }
@@ -98,12 +99,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .medium)
         button.font = font
         let countdown = store.countdown.text
-        button.attributedTitle = NSAttributedString(string: amount + " · " + countdown, attributes: [.font: font])
+        // The amount can be left out: it is long, and it stays on screen while sharing the display.
+        let mode = store.appearance.menuBarMode
+        let title = switch mode {
+        case .full: amount + " · " + countdown
+        case .countdown: countdown
+        case .icon: ""
+        }
+        button.attributedTitle = NSAttributedString(string: title, attributes: [.font: font])
         button.image = MenuBarMark.image
-        button.imagePosition = .imageLeading
+        button.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
         button.imageHugsTitle = true
+        let owed = mode == .full ? " · 待还 \(amount)" : ""
         button.toolTip = if let nearest = store.pending.first {
-            "出账日 · 待还 \(amount)\n\(nearest.name) · \(nearest.dateText) 到期 · \(countdown)\n以还款日当天结束为截止"
+            "出账日\(owed)\n\(nearest.name) · \(nearest.dateText) 到期 · \(countdown)\n以还款日当天结束为截止"
         } else {
             "出账日 · 全部账单已还清"
         }
@@ -126,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.performClose(nil)
         if window == nil, let store {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
-                                  styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
             window.title = "出账日"
             window.titleVisibility = .hidden
@@ -135,9 +144,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.isReleasedWhenClosed = false
             window.backgroundColor = .clear
             window.isOpaque = false
+            // A longer list wants a taller window, but a menu-bar utility has no use for full screen.
+            window.contentMinSize = NSSize(width: 760, height: 520)
+            window.collectionBehavior = [.fullScreenNone]
             window.contentView = NSHostingView(rootView:
-                RootView(store: store, settings: { [weak self] in self?.showSettings() }).ignoresSafeArea())
-            window.center()
+                RootView(store: store, reminders: reminders,
+                         settings: { [weak self] in self?.showSettings() }).ignoresSafeArea())
+            // Reopen where the window was left; center it the first time.
+            if !window.setFrameUsingName("MainWindow") { window.center() }
+            window.setFrameAutosaveName("MainWindow")
             self.window = window
         }
         window?.makeKeyAndOrderFront(nil)
@@ -153,14 +168,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSettings() {
         popover.performClose(nil)
-        guard let reminders else { return }
+        guard let reminders, let store else { return }
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 320),
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "出账日 · 提醒设置"
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView:
-                ReminderSettingsView(service: reminders, close: { [weak self] in self?.settingsWindow?.close() }))
+            // The content decides the height, so an added row or an error line is never cut off.
+            let content = NSHostingController(rootView:
+                ReminderSettingsView(service: reminders, store: store,
+                                     close: { [weak self] in self?.settingsWindow?.close() }))
+            content.sizingOptions = [.preferredContentSize]
+            window.contentViewController = content
+            window.setContentSize(content.view.fittingSize)
             window.center()
             settingsWindow = window
         }
