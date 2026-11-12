@@ -90,7 +90,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 本版本支持手动进入贷款下一期，尚未提供自动循环账单、任意自定义字段、部分还款、开机自启、iCloud 同步、隐私锁和 Intel 下载包。
 
-0.2.0 的功能与验收规则见 [需求计划](docs/plans/v0.2.0.md)，0.2.1 的倒计时修正见 [发布说明](docs/releases/v0.2.1.md)。
+0.2.0 的功能与验收规则见 [需求计划](docs/plans/v0.2.0.md)，0.2.2 的交互与提醒改进见 [发布说明](docs/releases/v0.2.2.md)。
 
 发布内容见 [更新记录](CHANGELOG.md)。
 
