@@ -42,18 +42,25 @@ extension Color {
 enum Design {
     static let ink = Color.adaptive(0x134E4A, dark: 0xB9F5E6)
     static let body = Color.adaptive(0x1E293B, dark: 0xE6F2EF)
-    static let secondary = Color.adaptive(0x64748B, dark: 0xA8BDB7)
+    static let secondary = Color.adaptive(0x475569, dark: 0xB6C9C3)
     static let currency = Color.adaptive(0x0F766E, dark: 0x5EEAD4)
     static let teal = Color(hex: 0x0FBFA0)
-    // Primary buttons remain bright mint in both modes and need dark text.
-    static let darkTeal = Color(hex: 0x02332B)
     static let danger = Color.adaptive(0xE11D48, dark: 0xFDA4AF)
-    static let accent = LinearGradient(colors: [Color(hex: 0x3FF0CD), teal], startPoint: .top, endPoint: .bottom)
-    static let windowTop = Color.adaptive(0xD7EEEF, dark: 0x0E2B26, lightAlpha: 0.5, darkAlpha: 0.94)
-    static let windowBottom = Color.adaptive(0xBDF5E6, dark: 0x071D1A, lightAlpha: 0.3, darkAlpha: 0.98)
-    static let glassTint = Color.adaptive(0xFFFFFF, dark: 0x0C251F, lightAlpha: 0.15, darkAlpha: 0.72)
-    static let thinTint = Color.adaptive(0xFFFFFF, dark: 0x12362D, lightAlpha: 0, darkAlpha: 0.85)
-    static let glassBorder = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.6, darkAlpha: 0.14)
+    // Primary buttons are a deep teal in both appearances, so white labels stay legible on light and dark.
+    static let accent = LinearGradient(
+        colors: [Color.adaptive(0x0A8570, dark: 0x078470), Color.adaptive(0x05624F, dark: 0x04584C)],
+        startPoint: .top, endPoint: .bottom)
+    static let onAccent = Color(hex: 0xFFFFFF)
+    /// Shadow under the primary button: tinted to match the deep teal instead of glowing bright mint.
+    static let accentShadow = Color.adaptive(0x0A8570, dark: 0x04584C)
+    // Keep content surfaces legible over any wallpaper. Materials add depth only;
+    // these high-opacity tints own the final background luminance.
+    static let windowTop = Color.adaptive(0xEAF6F4, dark: 0x102D28, lightAlpha: 0.96, darkAlpha: 0.98)
+    static let windowBottom = Color.adaptive(0xDDF1EB, dark: 0x081E1B, lightAlpha: 0.98, darkAlpha: 0.99)
+    static let glassTint = Color.adaptive(0xFFFFFF, dark: 0x0C251F, lightAlpha: 0.1, darkAlpha: 0.45)
+    static let cardFill = Color.adaptive(0xFFFFFF, dark: 0x173630, lightAlpha: 0.9, darkAlpha: 0.94)
+    static let panelFill = Color.adaptive(0xF2FAF8, dark: 0x0D2924, lightAlpha: 0.96, darkAlpha: 0.97)
+    static let glassBorder = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.75, darkAlpha: 0.16)
     static let ghostFill = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.45, darkAlpha: 0.07)
     static let ghostPressed = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.7, darkAlpha: 0.14)
     static let ghostBorder = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.7, darkAlpha: 0.16)
@@ -61,12 +68,13 @@ enum Design {
     static let ghostStrongFill = Color.adaptive(0x0FBFA0, dark: 0x3FF0CD, lightAlpha: 0.14, darkAlpha: 0.16)
     static let ghostStrongPressed = Color.adaptive(0x0FBFA0, dark: 0x3FF0CD, lightAlpha: 0.26, darkAlpha: 0.28)
     static let ghostStrongBorder = Color.adaptive(0x0F766E, dark: 0x5EEAD4, lightAlpha: 0.32, darkAlpha: 0.4)
-    static let sidebarFill = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.1, darkAlpha: 0.025)
+    static let sidebarFill = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.28, darkAlpha: 0.035)
     static let sidebarDivider = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.5, darkAlpha: 0.1)
-    static let selectionFill = Color.adaptive(0xFFFFFF, dark: 0x3FF0CD, lightAlpha: 0.7, darkAlpha: 0.14)
-    static let rowHover = Color.adaptive(0xFFFFFF, dark: 0xFFFFFF, lightAlpha: 0.15, darkAlpha: 0.05)
-    static let popoverFill = Color.adaptive(0xD6F8EF, dark: 0x071E1B, lightAlpha: 0.25, darkAlpha: 0.85)
-    static let settingsFill = Color.adaptive(0xFFFFFF, dark: 0x0A241F, lightAlpha: 0, darkAlpha: 0.9)
+    // Selection and hover are translucent teal, never a bright white wash that fades the row's text.
+    static let selectionFill = Color.adaptive(0x0FBFA0, dark: 0x3FF0CD, lightAlpha: 0.12, darkAlpha: 0.14)
+    static let rowHover = Color.adaptive(0x0FBFA0, dark: 0xFFFFFF, lightAlpha: 0.06, darkAlpha: 0.05)
+    static let popoverFill = Color.adaptive(0xEDF8F5, dark: 0x0B241F, lightAlpha: 0.97, darkAlpha: 0.98)
+    static let settingsFill = Color.adaptive(0xF4FAF8, dark: 0x0D2924, lightAlpha: 0.98, darkAlpha: 0.98)
     static let overdueText = Color.adaptive(0xBE123C, dark: 0xFDA4AF)
     static let todayText = Color.adaptive(0x92400E, dark: 0xFDE68A)
     static let soonText = Color.adaptive(0x9A3412, dark: 0xFED7AA)
@@ -83,15 +91,17 @@ struct GlassSurface: ViewModifier {
     var thin = true
 
     @ViewBuilder func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius)
         if #available(macOS 26.0, *), !thin {
             content
-                .glassEffect(.regular.tint(Design.glassTint), in: RoundedRectangle(cornerRadius: radius))
+                .background(Design.panelFill, in: shape)
+                .glassEffect(.regular.tint(Design.glassTint), in: shape)
         } else {
             content
-                .background(Design.thinTint, in: RoundedRectangle(cornerRadius: radius))
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius))
+                .background(thin ? Design.cardFill : Design.panelFill, in: shape)
+                .background(thin ? .thinMaterial : .regularMaterial, in: shape)
                 .overlay {
-                    RoundedRectangle(cornerRadius: radius)
+                    shape
                         .strokeBorder(Design.glassBorder, lineWidth: 1)
                         .allowsHitTesting(false)
                 }
@@ -114,10 +124,10 @@ struct TealButtonStyle: ButtonStyle {
             .font(.system(size: 11, weight: .semibold))
             .padding(.horizontal, 14)
             .frame(height: height)
-            .foregroundStyle(Design.darkTeal)
+            .foregroundStyle(Design.onAccent)
             .background(Design.accent, in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.65), lineWidth: 0.7))
-            .shadow(color: Design.teal.opacity(0.35), radius: 10, y: 4)
+            .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 0.7))
+            .shadow(color: Design.accentShadow.opacity(0.28), radius: 10, y: 4)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
             .opacity(enabled ? 1 : 0.4)
             .contentShape(Capsule())
@@ -186,12 +196,19 @@ struct KindIcon: View {
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(LinearGradient(
-                colors: kind == .creditCard ? [Color(hex: 0x38BDF8), Color(hex: 0x6366F1)] :
-                    [Color(hex: 0xFCD34D), Color(hex: 0xF97316)],
+                colors: gradient,
                 startPoint: .topLeading, endPoint: .bottomTrailing),
                         in: RoundedRectangle(cornerRadius: size / 3))
             .shadow(color: .black.opacity(0.1), radius: 3, y: 2)
             .accessibilityHidden(true)
+    }
+
+    private var gradient: [Color] {
+        switch kind {
+        case .creditCard: [Color(hex: 0x38BDF8), Color(hex: 0x6366F1)]
+        case .loan: [Color(hex: 0xFCD34D), Color(hex: 0xF97316)]
+        case .borrowing: [Color(hex: 0x34D399), Color(hex: 0x0F766E)]
+        }
     }
 }
 
@@ -200,7 +217,7 @@ struct DueBadge: View {
     var now = Date()
     var body: some View {
         let style = DueStyle(bill: bill, now: now)
-        Text(bill.statusText(now: now)).font(.system(size: 10, weight: .medium))
+        Text(bill.statusText(now: now)).font(.system(size: 11, weight: .medium))
             .foregroundStyle(style.text).padding(.horizontal, 10).padding(.vertical, 4)
             .background(style.fill, in: Capsule()).fixedSize()
     }

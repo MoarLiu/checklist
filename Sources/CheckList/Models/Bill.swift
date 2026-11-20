@@ -2,11 +2,28 @@ import Foundation
 import SwiftData
 
 enum BillKind: String, Codable, CaseIterable, Identifiable {
-    case creditCard, loan
+    case creditCard, loan, borrowing
     var id: String { rawValue }
-    var title: String { self == .creditCard ? "信用卡" : "贷款" }
+    var title: String {
+        switch self {
+        case .creditCard: "信用卡"
+        case .loan: "贷款"
+        case .borrowing: "借款"
+        }
+    }
+
     var defaultName: String { title + "账单" }
-    var symbol: String { self == .creditCard ? "creditcard" : "building.columns" }
+    var symbol: String {
+        switch self {
+        case .creditCard: "creditcard"
+        case .loan: "building.columns"
+        case .borrowing: "person.2"
+        }
+    }
+
+    func acceptsName(_ name: String) -> Bool {
+        self != .borrowing || !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
 @Model
@@ -32,6 +49,9 @@ final class Bill {
     // Keep the original day through short months (Jan 31 → Feb 28 → Mar 31).
     var installmentDay: Int? = nil
     var nextInstallmentID: UUID? = nil
+    // Loan periods: nil means the old data predates this field. New loans fill both.
+    var currentInstallment: Int? = nil
+    var totalInstallments: Int? = nil
 
     init(kind: BillKind, name: String, amountInCents: Int64, dueDate: Date, now: Date = .now, calendar: Calendar = .current) {
         self.id = UUID()
@@ -49,10 +69,27 @@ final class Bill {
         self.reminderGeneration = UUID().uuidString
     }
 
+    /// The plan the form offers when a loan carries no period data: a new bill, or one
+    /// saved before these fields existed. Twelve periods is a common plan and both
+    /// fields stay editable, so the default never has to be right for every loan.
+    static let defaultInstallmentPlan: (current: Int, total: Int) = (1, 12)
+
     var kind: BillKind { BillKind(rawValue: kindRaw) ?? .creditCard }
     var dueDate: Date { dueDate(in: .current) }
     var dateText: String { String(format: "%04d-%02d-%02d", dueYear, dueMonth, dueDay) }
-    var amount: Decimal { Decimal(amountInCents) / 100 }
+
+    /// Shown as “第 3 / 12 期” for loans that carry period data.
+    var installmentText: String? {
+        guard kind == .loan, let current = currentInstallment, let total = totalInstallments else { return nil }
+        return "第 \(current) / \(total) 期"
+    }
+
+    /// Bills from before this feature had no period data and may still advance.
+    var canAdvanceInstallment: Bool {
+        guard kind == .loan else { return false }
+        guard let current = currentInstallment, let total = totalInstallments else { return true }
+        return current < total
+    }
 
     /// When the bill was repaid, in the same civil form as the due date.
     var paidText: String? {
@@ -102,11 +139,13 @@ final class Bill {
         if let snoozeUntil { return snoozeUntil }
         let due = dueDate(in: calendar)
         let today = calendar.startOfDay(for: now)
-        let dueTime = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: due)!
+        // Local calendar math can fail where a zone skips the wall-clock hour; the plain
+        // civil date is the only sensible fallback and never crashes the reminder loop.
+        let dueTime = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: due) ?? due
         if due > today { return dueTime }
         if let lastRemindedAt, lastRemindedAt >= today {
-            let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
-            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow)
+            guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) else { return nil }
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: tomorrow) ?? tomorrow
         }
         if due < today {
             // Never delivered (the app was closed on the due day): catch up at once.
@@ -115,6 +154,22 @@ final class Bill {
             return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: today) ?? now
         }
         return max(dueTime, now)
+    }
+}
+
+/// Positive whole numbers for loan period fields. Full-width digits, as a Chinese keyboard produces.
+enum PeriodNumber {
+    static let maximum = 9_999
+
+    static func parse(_ text: String) -> Int? {
+        let clean = String(text.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.map { scalar in
+            if (0xFF10...0xFF19).contains(scalar.value) {
+                return Character(UnicodeScalar(scalar.value - 0xFF10 + 0x30)!)
+            }
+            return Character(scalar)
+        })
+        guard let value = Int(clean) else { return nil }
+        return value > 0 && value <= maximum ? value : nil
     }
 }
 
@@ -140,12 +195,22 @@ enum Money {
         })
     }
 
-    static func format(_ cents: Int64, fraction: Bool = true) -> String {
+    // Configured once: the amount labels render on every list row and re-render on each
+    // frame of the counting animation.
+    private static let groupedFormatter = makeFormatter(fraction: true)
+    private static let wholeFormatter = makeFormatter(fraction: false)
+
+    private static func makeFormatter(fraction: Bool) -> NumberFormatter {
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.numberStyle = .decimal
         formatter.minimumFractionDigits = fraction ? 2 : 0
         formatter.maximumFractionDigits = fraction ? 2 : 0
+        return formatter
+    }
+
+    static func format(_ cents: Int64, fraction: Bool = true) -> String {
+        let formatter = fraction ? groupedFormatter : wholeFormatter
         return formatter.string(from: NSDecimalNumber(decimal: Decimal(cents) / 100)) ?? "0.00"
     }
 

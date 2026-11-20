@@ -16,6 +16,7 @@ struct RootView: View {
                     Group {
                         switch store.route {
                         case .home: HomeView(store: store, reminders: reminders)
+                        case .category(let kind): HomeView(store: store, reminders: reminders, kind: kind)
                         case .history: HistoryView(store: store)
                         case .add: BillFormView(store: store, reminders: reminders, editing: nil, draft: store.draft)
                         case .edit(let id):
@@ -80,26 +81,33 @@ struct RootView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let pending = store.pending
+        return VStack(alignment: .leading, spacing: 0) {
             // Real macOS traffic-light controls occupy this first 30 pt.
             Spacer().frame(height: 30)
             HStack(spacing: 10) {
                 ProductLogo()
                 VStack(alignment: .leading, spacing: 2) {
                     Text("出账日").font(.system(size: 16, weight: .semibold))
-                    Text("CheckList").font(.system(size: 10)).foregroundStyle(Design.secondary)
+                    Text("CheckList").font(.system(size: 11)).foregroundStyle(Design.secondary)
                 }
             }
             .padding(.bottom, 22)
-            navigation("待还账单", symbol: "list.bullet", count: store.pending.count, route: .home,
-                       selected: store.route != .history && !isHistoryDetail)
-            navigation("已还清", symbol: "checkmark", count: store.history.count, route: .history,
-                       selected: store.route == .history || isHistoryDetail)
+            navigation("待还账单", symbol: "list.bullet", count: pending.count, route: .home)
+            Text("按账单类型")
+                .font(.system(size: 10)).foregroundStyle(Design.secondary)
+                .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 4)
+            ForEach(BillKind.allCases) { kind in
+                navigation(kind.defaultName, symbol: kind.symbol,
+                           count: pending.count { $0.kind == kind }, route: .category(kind))
+            }
+            navigation("已还清", symbol: "checkmark", count: store.history.count, route: .history)
+                .padding(.top, 6)
             Spacer()
             notificationCard
             HStack {
                 Button(action: settings) {
-                    Label("提醒设置", systemImage: "gearshape").font(.system(size: 10))
+                    Label("提醒设置", systemImage: "gearshape").font(.system(size: 11))
                 }
                 .buttonStyle(.plain).foregroundStyle(Design.secondary)
                 Spacer()
@@ -120,11 +128,11 @@ struct RootView: View {
         .background(Design.sidebarFill)
     }
 
-    /// Live notification state instead of a sentence the user has to act on elsewhere.
+    /// Only a notification problem takes sidebar space; ordinary guidance lives in the docs.
     @ViewBuilder private var notificationCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let reminders, reminders.systemNotificationsEnabled, reminders.permissionChecked,
-               reminders.permission != .allowed {
+        if let reminders, reminders.systemNotificationsEnabled, reminders.permissionChecked,
+           reminders.permission != .allowed {
+            VStack(alignment: .leading, spacing: 8) {
                 Label(reminders.permission == .denied ? "系统通知已关闭" : "系统通知未开启",
                       systemImage: "bell.slash")
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(Design.ink)
@@ -134,21 +142,15 @@ struct RootView: View {
                     reminders.enableNotifications()
                 }
                 .buttonStyle(GhostButtonStyle(height: 24, strong: true))
-            } else {
-                Text("常驻菜单栏，到期日当天\n弹窗并伴随提示音提醒。")
-                    .font(.system(size: 11)).foregroundStyle(Design.secondary).lineSpacing(4)
             }
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading).glassCard()
         }
-        .padding(12).frame(maxWidth: .infinity, alignment: .leading).glassCard()
     }
 
-    private var isHistoryDetail: Bool {
-        if case .detail = store.route { return store.detailSource == .history }
-        return false
-    }
-
-    private func navigation(_ title: String, symbol: String, count: Int, route: AppRoute, selected: Bool) -> some View {
-        Button { store.route = route } label: {
+    private func navigation(_ title: String, symbol: String, count: Int, route: AppRoute) -> some View {
+        let selected = store.sidebarRoute == route
+        // Routed through the store so a keyboard row selection never survives a page change.
+        return Button { store.open(route) } label: {
             HStack(spacing: 6) {
                 Image(systemName: symbol).font(.system(size: 12))
                 Text(title).font(.system(size: 11, weight: selected ? .semibold : .medium))
@@ -161,13 +163,20 @@ struct RootView: View {
         }
         .buttonStyle(.plain).padding(.bottom, 6)
         .accessibilityLabel("\(title)，\(count) 笔")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
 struct HomeView: View {
     @Bindable var store: AppStore
     let reminders: ReminderService?
+    var kind: BillKind? = nil
+
     var body: some View {
+        let bills = store.pending(of: kind)
+        let dueDays = bills.map { $0.daysLeft(now: store.now) }
+        let dueCount = dueDays.count { $0 == 0 }
+        let overdueCount = dueDays.count { $0 < 0 }
         VStack(alignment: .leading, spacing: 24) {
             if showsPermissionPrompt, let reminders {
                 PermissionBanner(
@@ -176,21 +185,26 @@ struct HomeView: View {
                 )
             }
             HStack(alignment: .top) {
-                BillAmountSummary(title: "本期待还总额", cents: store.total) {
+                BillAmountSummary(title: kind.map { "\($0.title)待还小计" } ?? "本期待还总额",
+                                  cents: kind == nil ? store.total : bills.reduce(0) { $0 + $1.amountInCents }) {
                     HStack(spacing: 6) {
-                        Text("共 \(store.pending.count) 笔未还")
-                        if store.dueCount > 0 { Text("· \(store.dueCount) 笔今天到期").foregroundStyle(Design.todayText) }
-                        if store.overdueCount > 0 { Text("· \(store.overdueCount) 笔逾期").foregroundStyle(Design.overdueText) }
+                        Text("共 \(bills.count) 笔未还")
+                        if dueCount > 0 { Text("· \(dueCount) 笔今天到期").foregroundStyle(Design.todayText) }
+                        if overdueCount > 0 { Text("· \(overdueCount) 笔逾期").foregroundStyle(Design.overdueText) }
+                    }
+                    if kind == nil, bills.contains(where: { $0.kind == .borrowing }) {
+                        Text("借款金额不计入总额")
                     }
                 }
                 Spacer(minLength: 8)
                 Button { store.beginAdding() } label: { Label("记一笔", systemImage: "plus") }
                     .buttonStyle(TealButtonStyle()).keyboardShortcut("n")
             }
-            if store.pending.isEmpty {
-                EmptyState(title: "全部还清了", subtitle: "点「记一笔」添加新账单", symbol: "checkmark")
+            if bills.isEmpty {
+                EmptyState(title: kind.map { "没有待还的\($0.defaultName)" } ?? "全部还清了",
+                           subtitle: "点「记一笔」添加新账单", symbol: kind?.symbol ?? "checkmark")
             } else {
-                BillList(store: store, bills: store.pending, snoozeChoices: snoozeChoices)
+                BillList(store: store, bills: bills, snoozeChoices: snoozeChoices)
             }
         }
     }
@@ -213,7 +227,7 @@ struct PermissionBanner: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "bell.badge").font(.system(size: 14))
-                .foregroundStyle(Design.darkTeal).frame(width: 28, height: 28)
+                .foregroundStyle(Design.onAccent).frame(width: 28, height: 28)
                 .background(Design.accent, in: RoundedRectangle(cornerRadius: 8))
             VStack(alignment: .leading, spacing: 2) {
                 Text("开启系统通知").font(.system(size: 12, weight: .semibold))
@@ -324,7 +338,7 @@ struct BillRow: View {
                     Text(bill.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
                     ReminderMark(bill: bill)
                 }
-                Text(subtitle).font(.system(size: 10)).foregroundStyle(Design.secondary).lineLimit(1)
+                Text(subtitle).font(.system(size: 11)).foregroundStyle(Design.secondary).lineLimit(1)
             }.frame(maxWidth: .infinity, alignment: .leading)
             DueBadge(bill: bill, now: now)
             Text("¥" + Money.format(bill.amountInCents))
@@ -339,15 +353,14 @@ struct BillRow: View {
         .overlay(RoundedRectangle(cornerRadius: 16)
             .strokeBorder(Design.teal.opacity(selected ? 0.55 : 0), lineWidth: 1.5)
             .allowsHitTesting(false))
-        .opacity(bill.isPaid ? 0.8 : 1)
         .contentShape(RoundedRectangle(cornerRadius: 16))
-        .onTapGesture { store.selectedBillID = bill.id; store.openDetail(bill) }
+        .onTapGesture { store.openDetail(bill) }
         .onHover { hovered = $0 }
         .contextMenu { menu }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(bill.name)，\(Money.format(bill.amountInCents)) 元，还款日 \(bill.dateText)，\(bill.statusText(now: now))")
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { store.selectedBillID = bill.id; store.openDetail(bill) }
+        .accessibilityAction { store.openDetail(bill) }
         .accessibilityAction(named: bill.isPaid ? "撤销还款" : "设为已经还款") {
             store.setPaid(bill, paid: !bill.isPaid)
         }
@@ -356,8 +369,9 @@ struct BillRow: View {
     }
 
     private var subtitle: String {
-        bill.isPaid ? "\(bill.kind.title) · \(bill.paidText ?? bill.dateText) 已还"
-            : "\(bill.kind.title) · 还款日 \(bill.dateText)"
+        let period = bill.installmentText.map { " · \($0)" } ?? ""
+        return bill.isPaid ? "\(bill.kind.title)\(period) · \(bill.paidText ?? bill.dateText) 已还"
+            : "\(bill.kind.title)\(period) · 还款日 \(bill.dateText)"
     }
 
     @ViewBuilder private var menu: some View {
@@ -365,7 +379,7 @@ struct BillRow: View {
             Button("撤销还款") { store.setPaid(bill, paid: false) }
         } else {
             Button("设为已经还款") { store.setPaid(bill, paid: true) }
-            if bill.kind == .loan {
+            if bill.canAdvanceInstallment {
                 Button("下一期") { store.advanceInstallment(bill) }
             }
             if bill.daysLeft(now: now) <= 0 {
@@ -398,7 +412,7 @@ struct QuickActionButton: View {
         } label: {
             Image(systemName: bill.isPaid ? "arrow.uturn.backward" : "checkmark")
                 .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(Design.darkTeal)
+                .foregroundStyle(Design.onAccent)
                 .frame(width: size, height: size)
                 .background(Design.accent, in: RoundedRectangle(cornerRadius: size / 3))
                 .contentShape(RoundedRectangle(cornerRadius: size / 3))
@@ -452,7 +466,7 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: symbol).font(.system(size: 24, weight: .medium))
-                .foregroundStyle(Design.darkTeal).frame(width: 48, height: 48)
+                .foregroundStyle(Design.onAccent).frame(width: 48, height: 48)
                 .background(Design.accent, in: Circle())
             Text(title).font(.system(size: 13, weight: .medium))
             Text(subtitle).font(.system(size: 11)).foregroundStyle(Design.secondary)
@@ -469,6 +483,8 @@ struct BillFormView: View {
     @State private var kind: BillKind
     @State private var name: String
     @State private var amount: String
+    @State private var currentInstallment: String
+    @State private var totalInstallments: String
     @State private var due: Date
     @FocusState private var amountFocused: Bool
 
@@ -477,9 +493,15 @@ struct BillFormView: View {
         self.reminders = reminders
         self.editing = editing
         self.draft = draft
-        _kind = State(initialValue: editing?.kind ?? draft?.kind ?? .creditCard)
+        _kind = State(initialValue: editing?.kind ?? draft?.kind ?? store.addReturn.categoryKind ?? .creditCard)
         _name = State(initialValue: editing?.name ?? draft?.name ?? "")
         _amount = State(initialValue: editing.map { Money.plain($0.amountInCents) } ?? "")
+        // A loan without period data (new, or saved before the fields existed) opens on the
+        // shared default plan rather than a single period, which would hide 「下一期」.
+        _currentInstallment = State(initialValue: editing?.currentInstallment.map(String.init)
+            ?? String(Bill.defaultInstallmentPlan.current))
+        _totalInstallments = State(initialValue: editing?.totalInstallments.map(String.init)
+            ?? String(Bill.defaultInstallmentPlan.total))
         _due = State(initialValue: editing?.dueDate ??
             draft?.due ?? Calendar.current.date(byAdding: .day, value: 7, to: .now)!)
     }
@@ -505,7 +527,7 @@ struct BillFormView: View {
                                     Label(option.title, systemImage: option.symbol)
                                         .font(.system(size: 11, weight: .medium))
                                         .frame(maxWidth: .infinity).frame(height: 28)
-                                        .foregroundStyle(kind == option ? Design.darkTeal : Design.secondary)
+                                        .foregroundStyle(kind == option ? Design.onAccent : Design.secondary)
                                         .background {
                                             if kind == option { Capsule().fill(Design.accent) }
                                         }
@@ -517,21 +539,21 @@ struct BillFormView: View {
                         }.padding(4).glassCard(radius: 20)
                             .accessibilityElement(children: .contain).accessibilityLabel("账单类型")
                     }
-                    field("名称（选填）") {
+                    field(isBorrowing ? "借款人" : "名称（选填）") {
                         TextField("", text: $name)
                             .textFieldStyle(.plain).font(.system(size: 13))
                             .overlay(alignment: .leading) {
                                 if name.isEmpty {
-                                    Text(kind == .creditCard ? "如：招商银行信用卡" : "如：房贷")
+                                    Text(namePlaceholder)
                                         .font(.system(size: 13)).foregroundStyle(Design.secondary)
                                         .allowsHitTesting(false).accessibilityHidden(true)
                                 }
                             }
                             .padding(.horizontal, 14).frame(height: 36).glassCard()
-                            .accessibilityLabel("账单名称")
-                            .accessibilityHint("选填")
+                            .accessibilityLabel(isBorrowing ? "借款人" : "账单名称")
+                            .accessibilityHint(isBorrowing ? "必填" : "选填")
                     }
-                    field("账单金额") {
+                    field(amountTitle) {
                         HStack(spacing: 8) {
                             Text("¥").font(.system(size: 20)).foregroundStyle(Design.currency)
                             TextField("", text: $amount).textFieldStyle(.plain)
@@ -543,7 +565,7 @@ struct BillFormView: View {
                                             .allowsHitTesting(false).accessibilityHidden(true)
                                     }
                                 }
-                                .focused($amountFocused).accessibilityLabel("账单金额")
+                                .focused($amountFocused).accessibilityLabel(amountTitle)
                                 .accessibilityHint("人民币，最多两位小数")
                         }.padding(.horizontal, 14).frame(height: 48).glassCard()
                         // Report a bad amount once the field is left, not on the first keystroke.
@@ -552,9 +574,22 @@ struct BillFormView: View {
                                 .font(.system(size: 10)).foregroundStyle(Design.danger)
                         }
                     }
-                    field("还款日期") {
+                    if kind == .loan {
+                        HStack(alignment: .top, spacing: 12) {
+                            field("当前期数") {
+                                installmentField("当前期数", text: $currentInstallment, placeholder: "如：1")
+                            }
+                            field("全部期数") {
+                                installmentField("全部期数", text: $totalInstallments, placeholder: "如：12")
+                            }
+                        }
+                        if let installmentError {
+                            Text(installmentError).font(.system(size: 10)).foregroundStyle(Design.danger)
+                        }
+                    }
+                    field(dueDateTitle) {
                         VStack(alignment: .leading, spacing: 8) {
-                            DatePicker("还款日期", selection: $due, displayedComponents: .date)
+                            DatePicker(dueDateTitle, selection: $due, displayedComponents: .date)
                                 .labelsHidden().datePickerStyle(.field).font(.system(size: 13))
                                 .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                                 .glassCard()
@@ -569,14 +604,67 @@ struct BillFormView: View {
                 }
                 .frame(width: 336)
                 BillFormPreview(kind: kind, name: name, amount: amount, due: due,
+                                installmentText: installmentText,
                                 editing: editing, reminders: reminders)
             }
             Button(action: save) { Text(editing == nil ? "保存" : "保存修改").frame(maxWidth: .infinity) }
-                .buttonStyle(TealButtonStyle()).disabled(Money.parse(amount) == nil)
+                .buttonStyle(TealButtonStyle())
+                .disabled(!kind.acceptsName(name) || Money.parse(amount) == nil || installmentError != nil)
                 .keyboardShortcut(.defaultAction)
                 .frame(maxWidth: 336)
         }
         .onAppear { if editing == nil { amountFocused = true } }
+    }
+
+    private var isBorrowing: Bool { kind == .borrowing }
+    private var amountTitle: String { isBorrowing ? "借款金额" : "账单金额" }
+    private var dueDateTitle: String { isBorrowing ? "承诺还款日期" : "还款日期" }
+
+    private var namePlaceholder: String {
+        switch kind {
+        case .creditCard: "如：招商银行信用卡"
+        case .loan: "如：房贷"
+        case .borrowing: "请输入借款人姓名"
+        }
+    }
+
+    private var installmentPlan: (current: Int, total: Int)? {
+        guard kind == .loan,
+              let current = PeriodNumber.parse(currentInstallment),
+              let total = PeriodNumber.parse(totalInstallments) else { return nil }
+        return (current, total)
+    }
+
+    private var installmentText: String? {
+        installmentPlan.map { "第 \($0.current) / \($0.total) 期" }
+    }
+
+    private var installmentError: String? {
+        guard kind == .loan else { return nil }
+        if currentInstallment.isEmpty || totalInstallments.isEmpty {
+            return "请输入当前期数和全部期数"
+        }
+        guard let current = PeriodNumber.parse(currentInstallment) else {
+            return "当前期数需为 1–\(PeriodNumber.maximum) 的整数"
+        }
+        guard let total = PeriodNumber.parse(totalInstallments) else {
+            return "全部期数需为 1–\(PeriodNumber.maximum) 的整数"
+        }
+        return total < current ? "全部期数不能小于当前期数" : nil
+    }
+
+    private func installmentField(_ title: String, text: Binding<String>, placeholder: String) -> some View {
+        TextField("", text: text)
+            .textFieldStyle(.plain).font(.system(size: 13)).monospacedDigit()
+            .overlay(alignment: .leading) {
+                if text.wrappedValue.isEmpty {
+                    Text(placeholder).font(.system(size: 13)).foregroundStyle(Design.secondary)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 14).frame(height: 36).glassCard()
+            .accessibilityLabel(title)
+            .accessibilityHint("正整数")
     }
 
     private var presets: [(title: String, date: Date)] {
@@ -595,17 +683,21 @@ struct BillFormView: View {
 
     private func cancel() {
         if editing == nil, draft != nil { store.draft = nil }
-        store.route = editing == nil ? .home : store.editReturn
+        store.route = editing == nil ? store.addReturn : store.editReturn
     }
 
     private func save() {
-        guard let cents = Money.parse(amount) else { return }
+        guard kind.acceptsName(name), let cents = Money.parse(amount), installmentError == nil else { return }
         if let editing {
-            if store.update(editing, kind: kind, name: name, cents: cents, due: due) {
+            if store.update(editing, kind: kind, name: name, cents: cents, due: due,
+                            currentInstallment: installmentPlan?.current,
+                            totalInstallments: installmentPlan?.total) {
                 store.route = store.editReturn
             }
         } else {
-            store.add(kind: kind, name: name, cents: cents, due: due)
+            store.add(kind: kind, name: name, cents: cents, due: due,
+                      currentInstallment: installmentPlan?.current,
+                      totalInstallments: installmentPlan?.total)
         }
     }
 
@@ -623,6 +715,7 @@ struct BillFormPreview: View {
     let name: String
     let amount: String
     let due: Date
+    var installmentText: String?
     let editing: Bill?
     let reminders: ReminderService?
 
@@ -634,7 +727,8 @@ struct BillFormPreview: View {
                     KindIcon(kind: kind, size: 32)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(displayName).font(.system(size: 13, weight: .medium)).lineLimit(2)
-                        Text(kind.title).font(.system(size: 10)).foregroundStyle(Design.secondary)
+                        Text(kind.title + (installmentText.map { " · \($0)" } ?? ""))
+                            .font(.system(size: 11)).foregroundStyle(Design.secondary)
                     }
                     Spacer(minLength: 0)
                 }
@@ -714,19 +808,22 @@ struct BillDetailView: View {
                         Text(bill.name).font(.system(size: 20, weight: .semibold)).lineLimit(2)
                         ReminderMark(bill: bill)
                     }
-                    Text(bill.kind.title).font(.system(size: 12)).foregroundStyle(Design.secondary)
+                    Text(bill.kind.title + (bill.installmentText.map { " · \($0)" } ?? ""))
+                        .font(.system(size: 12)).foregroundStyle(Design.secondary)
                 }
                 Spacer()
                 DueBadge(bill: bill, now: store.now)
             }
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("应还金额").font(.system(size: 12)).foregroundStyle(Design.secondary)
+                    Text(bill.kind == .borrowing ? "借款金额" : "应还金额")
+                        .font(.system(size: 12)).foregroundStyle(Design.secondary)
                     Text("¥" + Money.format(bill.amountInCents)).font(.system(size: 36, weight: .semibold))
                         .foregroundStyle(Design.ink).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
                 }
                 HStack(alignment: .top, spacing: 12) {
-                    info("还款日", value: bill.dateText)
+                    info(bill.kind == .borrowing ? "承诺还款日期" : "还款日", value: bill.dateText)
+                    if let installmentText = bill.installmentText { info("期数", value: installmentText) }
                     info("状态", value: bill.isPaid ? "已还款" : "待还款")
                     info("提醒", value: bill.isPaid ? "已完成" : bill.isMuted ? "已关闭" :
                             bill.snoozeUntil != nil ? "已稍后提醒" : "到期日提醒")
@@ -737,12 +834,12 @@ struct BillDetailView: View {
                 if bill.isPaid {
                     Button("撤销还款") { store.setPaid(bill, paid: false) }.buttonStyle(GhostButtonStyle())
                 } else {
-                    Button { if store.setPaid(bill, paid: true) { store.route = .home } } label: {
+                    Button { if store.setPaid(bill, paid: true) { store.route = store.detailSource } } label: {
                         Label("设为已经还款", systemImage: "checkmark")
                     }.buttonStyle(TealButtonStyle())
-                    if bill.kind == .loan {
+                    if bill.canAdvanceInstallment {
                         Button {
-                            if store.advanceInstallment(bill) { store.route = .home }
+                            if store.advanceInstallment(bill) { store.route = store.detailSource }
                         } label: {
                             Label("下一期", systemImage: "arrow.right")
                         }

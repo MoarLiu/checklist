@@ -3,7 +3,12 @@ import Observation
 import SwiftData
 
 enum AppRoute: Equatable {
-    case home, add, history, detail(UUID), edit(UUID)
+    case home, category(BillKind), add, history, detail(UUID), edit(UUID)
+
+    var categoryKind: BillKind? {
+        if case .category(let kind) = self { return kind }
+        return nil
+    }
 }
 
 /// A bill the form starts from without it existing yet: repeating a monthly card bill.
@@ -61,6 +66,8 @@ struct BillSnapshot {
     let paidAt: Date?
     let installmentDay: Int?
     let nextInstallmentID: UUID?
+    let currentInstallment: Int?
+    let totalInstallments: Int?
 
     init(_ bill: Bill) {
         id = bill.id
@@ -78,6 +85,8 @@ struct BillSnapshot {
         paidAt = bill.paidAt
         installmentDay = bill.installmentDay
         nextInstallmentID = bill.nextInstallmentID
+        currentInstallment = bill.currentInstallment
+        totalInstallments = bill.totalInstallments
     }
 
     /// A fresh reminder generation is kept: notifications from before the deletion stay invalid.
@@ -96,6 +105,8 @@ struct BillSnapshot {
         bill.paidAt = paidAt
         bill.installmentDay = installmentDay
         bill.nextInstallmentID = nextInstallmentID
+        bill.currentInstallment = currentInstallment
+        bill.totalInstallments = totalInstallments
         return bill
     }
 }
@@ -107,6 +118,7 @@ final class AppStore {
     var bills: [Bill] = []
     var route: AppRoute = .home
     var detailSource: AppRoute = .home
+    private(set) var addReturn: AppRoute = .home
     /// Where the edit form returns to: the list or detail page it was opened from.
     var editReturn: AppRoute = .home
     /// The row the keyboard acts on in the bill lists.
@@ -118,7 +130,6 @@ final class AppStore {
     /// Reverses the action the current toast reports. Cleared together with the toast.
     var toastAction: (() -> Void)?
     var now = Date()
-    var revision = 0
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var onClockChange: (() -> Void)?
     @ObservationIgnored var showWindow: (() -> Void)?
@@ -142,13 +153,29 @@ final class AppStore {
     }
 
     var context: ModelContext { container.mainContext }
-    var pending: [Bill] { bills.filter { !$0.isPaid }.sorted { $0.dueDate == $1.dueDate ? $0.createdAt < $1.createdAt : $0.dueDate < $1.dueDate } }
+    var pending: [Bill] { pending(of: nil) }
     var history: [Bill] { bills.filter(\.isPaid).sorted { ($0.paidAt ?? $0.createdAt) > ($1.paidAt ?? $1.createdAt) } }
-    var total: Int64 { pending.reduce(0) { $0 + $1.amountInCents } }
+    var total: Int64 {
+        bills.lazy.filter { !$0.isPaid && $0.kind != .borrowing }.reduce(0) { $0 + $1.amountInCents }
+    }
     var paidTotal: Int64 { history.reduce(0) { $0 + $1.amountInCents } }
     var countdown: BillCountdown { BillCountdown(dueDate: pending.first?.dueDate, now: now) }
-    var dueCount: Int { pending.filter { $0.daysLeft(now: now) == 0 }.count }
-    var overdueCount: Int { pending.filter { $0.daysLeft(now: now) < 0 }.count }
+
+    var sidebarRoute: AppRoute {
+        switch route {
+        case .add: return addReturn
+        case .detail: return detailSource
+        case .edit:
+            if case .detail = editReturn { return detailSource }
+            return editReturn
+        default: return route
+        }
+    }
+
+    func pending(of kind: BillKind?) -> [Bill] {
+        bills.filter { !$0.isPaid && (kind == nil || $0.kind == kind) }
+            .sorted { $0.dueDate == $1.dueDate ? $0.createdAt < $1.createdAt : $0.dueDate < $1.dueDate }
+    }
 
     func reload() throws { bills = try context.fetch(FetchDescriptor<Bill>()) }
     func bill(_ id: UUID) -> Bill? { bills.first { $0.id == id } }
@@ -179,7 +206,6 @@ final class AppStore {
         do {
             try persist(context)
             try reload()
-            revision += 1
             onChange?()
             return true
         } catch {
@@ -190,14 +216,35 @@ final class AppStore {
         }
     }
 
-    func add(kind: BillKind, name: String, cents: Int64, due: Date) {
-        guard cents > 0, cents <= Money.maximumCents else { return }
-        context.insert(Bill(kind: kind, name: name, amountInCents: cents, dueDate: due))
-        if save() { route = .home; draft = nil; say("已保存") }
+    func add(kind: BillKind, name: String, cents: Int64, due: Date,
+             currentInstallment: Int? = nil, totalInstallments: Int? = nil) {
+        guard kind.acceptsName(name), cents > 0, cents <= Money.maximumCents,
+              Self.installmentsAreValid(kind: kind, current: currentInstallment, total: totalInstallments) else { return }
+        let bill = Bill(kind: kind, name: name, amountInCents: cents, dueDate: due)
+        if kind == .loan {
+            bill.currentInstallment = currentInstallment
+            bill.totalInstallments = totalInstallments
+        }
+        context.insert(bill)
+        if save() {
+            route = route == .add && addReturn.categoryKind != nil ? .category(kind) : .home
+            draft = nil
+            say("已保存")
+        }
+    }
+
+    /// Legacy calls and old bills may carry no period data; a half-filled plan is never valid.
+    private static func installmentsAreValid(kind: BillKind, current: Int?, total: Int?) -> Bool {
+        guard kind == .loan else { return current == nil && total == nil }
+        guard let current, let total else { return current == nil && total == nil }
+        return current > 0 && total >= current
     }
 
     /// Card bills repeat every month with a fresh amount, so the form starts filled in for the next one.
     func copyToNextMonth(_ bill: Bill) {
+        guard bill.kind == .creditCard else { return }
+        addReturn = sidebarRoute == .category(.creditCard) ? .category(.creditCard) : .home
+        selectedBillID = nil
         draft = BillDraft(bill)
         route = .add
         showWindow?()
@@ -206,8 +253,10 @@ final class AppStore {
     /// Edits the fields the form offers. Reminders follow the new date and amount on the next sync.
     @discardableResult
     func update(_ bill: Bill, kind: BillKind, name: String, cents: Int64, due: Date,
+                currentInstallment: Int? = nil, totalInstallments: Int? = nil,
                 calendar: Calendar = .current) -> Bool {
-        guard self.bill(bill.id) === bill, cents > 0, cents <= Money.maximumCents else { return false }
+        guard self.bill(bill.id) === bill, kind.acceptsName(name), cents > 0, cents <= Money.maximumCents,
+              Self.installmentsAreValid(kind: kind, current: currentInstallment, total: totalInstallments) else { return false }
         let previous = BillSnapshot(bill)
         let previousGeneration = bill.reminderGeneration
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -219,6 +268,13 @@ final class AppStore {
         bill.dueYear = parts.year!
         bill.dueMonth = parts.month!
         bill.dueDay = parts.day!
+        if kind != .loan {
+            bill.currentInstallment = nil
+            bill.totalInstallments = nil
+        } else if currentInstallment != nil || totalInstallments != nil {
+            bill.currentInstallment = currentInstallment
+            bill.totalInstallments = totalInstallments
+        }
         if dateChanged {
             // A new date is a new schedule: later installments follow its day, and the
             // delivery marker of the old date must not swallow the new one.
@@ -237,6 +293,8 @@ final class AppStore {
                 target.dueMonth = previous.dueMonth
                 target.dueDay = previous.dueDay
                 target.installmentDay = previous.installmentDay
+                target.currentInstallment = previous.currentInstallment
+                target.totalInstallments = previous.totalInstallments
                 target.lastRemindedAt = previous.lastRemindedAt
                 target.snoozeUntil = previous.snoozeUntil
                 target.reminderGeneration = previousGeneration
@@ -264,7 +322,10 @@ final class AppStore {
                 self.setPaid(target, paid: false)
             })
         } else {
-            say("已撤销还款")
+            // A live next installment stays (the plan asks for that), but the ledger now
+            // holds two periods of the same loan: say so instead of leaving it silent.
+            let hasNextInstallment = bill.nextInstallmentID.flatMap { self.bill($0) } != nil
+            say(hasNextInstallment ? "已撤销还款，下一期账单仍保留" : "已撤销还款")
         }
         return true
     }
@@ -273,6 +334,10 @@ final class AppStore {
     @discardableResult
     func advanceInstallment(_ bill: Bill, now: Date = .now, calendar: Calendar = .current) -> Bool {
         guard self.bill(bill.id) === bill, bill.kind == .loan, !bill.isPaid else { return false }
+        guard bill.canAdvanceInstallment else {
+            errorMessage = "已是最后一期，这笔贷款没有下一期。"
+            return false
+        }
         if let nextID = bill.nextInstallmentID, self.bill(nextID) != nil {
             errorMessage = "这期账单已生成下一期，请直接查看已有的下一期账单。"
             return false
@@ -284,6 +349,8 @@ final class AppStore {
         let next = Bill(kind: bill.kind, name: bill.name, amountInCents: bill.amountInCents,
                         dueDate: due, now: now, calendar: calendar)
         next.installmentDay = bill.installmentDay ?? bill.dueDay
+        next.currentInstallment = bill.currentInstallment.map { $0 + 1 }
+        next.totalInstallments = bill.totalInstallments
         next.isMuted = bill.isMuted
         let previousPaidAt = bill.paidAt
         let previousSnooze = bill.snoozeUntil
@@ -394,23 +461,38 @@ final class AppStore {
 
     func open(_ route: AppRoute) {
         // A plain "add" starts empty; only copyToNextMonth leaves a draft for the form.
-        if route == .add { draft = nil }
+        if route == .add {
+            draft = nil
+            addReturn = .home
+        }
+        // Keyboard row selection belongs to a list page: never let it survive a route change.
+        selectedBillID = nil
         self.route = route
         showWindow?()
     }
 
     func beginAdding() {
+        addReturn = route.categoryKind == nil ? .home : route
+        selectedBillID = nil
         draft = nil
         route = .add
     }
 
     func openDetail(_ bill: Bill, show: Bool = false) {
-        detailSource = bill.isPaid ? .history : .home
+        selectedBillID = nil
+        if bill.isPaid {
+            detailSource = .history
+        } else if !show, route.categoryKind == bill.kind {
+            detailSource = route
+        } else {
+            detailSource = .home
+        }
         route = .detail(bill.id)
         if show { showWindow?() }
     }
 
     func edit(_ bill: Bill) {
+        selectedBillID = nil
         editReturn = route
         route = .edit(bill.id)
     }
@@ -440,15 +522,18 @@ final class AppStore {
 
     func seedDemo() {
         guard bills.isEmpty else { return }
-        let entries: [(BillKind, String, Int64, Int)] = [
-            (.creditCard, "招商银行信用卡", 328050, 0),
-            (.loan, "房贷 · 工商银行", 741500, 6),
-            (.creditCard, "花呗", 126080, 3),
-            (.loan, "车贷", 298000, 15),
+        let entries: [(BillKind, String, Int64, Int, Int?, Int?)] = [
+            (.creditCard, "招商银行信用卡", 328050, 0, nil, nil),
+            (.loan, "房贷 · 工商银行", 741500, 6, 5, 240),
+            (.creditCard, "花呗", 126080, 3, nil, nil),
+            (.loan, "车贷", 298000, 15, 12, 36),
         ]
-        for (kind, name, cents, days) in entries {
-            context.insert(Bill(kind: kind, name: name, amountInCents: cents,
-                                dueDate: Calendar.current.date(byAdding: .day, value: days, to: .now)!))
+        for (kind, name, cents, days, currentInstallment, totalInstallments) in entries {
+            let bill = Bill(kind: kind, name: name, amountInCents: cents,
+                            dueDate: Calendar.current.date(byAdding: .day, value: days, to: .now)!)
+            bill.currentInstallment = currentInstallment
+            bill.totalInstallments = totalInstallments
+            context.insert(bill)
         }
         _ = save()
     }

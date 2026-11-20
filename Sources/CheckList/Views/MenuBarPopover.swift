@@ -7,27 +7,29 @@ struct MenuBarPopover: View {
     let quit: () -> Void
 
     var body: some View {
+        let pending = store.pending
+        let hasBorrowing = pending.contains { $0.kind == .borrowing }
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("待还总额").font(.system(size: 11))
+                Text(hasBorrowing ? "待还总额（不含借款）" : "待还总额").font(.system(size: 11))
                 Spacer()
-                Text("\(store.pending.count) 笔").font(.system(size: 10))
+                Text("\(pending.count) 笔").font(.system(size: 10))
             }.foregroundStyle(Design.secondary)
             Text("¥" + Money.format(store.total)).font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(Design.ink).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
-            if store.pending.isEmpty {
+            if pending.isEmpty {
                 Text("全部还清，轻松一身").font(.system(size: 12))
                     .foregroundStyle(Design.secondary).frame(maxWidth: .infinity).padding(.vertical, 20)
             } else {
                 VStack(spacing: 2) {
-                    ForEach(Array(store.pending.prefix(4))) { bill in
+                    ForEach(Array(pending.prefix(4))) { bill in
                         PopoverRow(bill: bill, now: store.now, store: store)
                     }
                 }
-                if store.pending.count > 4 {
+                if pending.count > 4 {
                     // The list stops at four rows; say so instead of hiding the rest.
                     Button { store.open(.home) } label: {
-                        Text("查看全部 \(store.pending.count) 笔").font(.system(size: 10, weight: .medium))
+                        Text("查看全部 \(pending.count) 笔").font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Design.currency)
                             .frame(maxWidth: .infinity).frame(height: 20).contentShape(Rectangle())
                     }.buttonStyle(.plain)
@@ -46,6 +48,21 @@ struct MenuBarPopover: View {
                 }
                 .padding(.horizontal, 10).frame(height: 24)
                 .background(Design.ghostStrongFill, in: Capsule())
+            }
+            if let error = store.errorMessage {
+                // Saves can fail while only the menu bar is open; the window's alert is not
+                // visible then, so the failure is reported here instead of nowhere.
+                HStack(spacing: 8) {
+                    Text(error).font(.system(size: 10, weight: .medium)).foregroundStyle(Design.danger)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("处理") { store.showWindow?() }
+                        .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Design.currency)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Design.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack(spacing: 6) {
                 Button { store.open(.add) } label: { Text("记一笔").frame(maxWidth: .infinity) }
@@ -159,7 +176,7 @@ struct ReminderSettingsView: View {
         }
         .padding(24).frame(width: 410).foregroundStyle(Design.body)
         .background(Design.settingsFill)
-        .background(.ultraThinMaterial)
+        .background(.regularMaterial)
         .tint(Design.teal)
         .onChange(of: service.settings.hour) { service.refresh() }
         .onChange(of: service.settings.minute) { service.refresh() }

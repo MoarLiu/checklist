@@ -26,6 +26,33 @@ struct InteractionTests {
                         systemNotificationsEnabled: false, clock: { now }, presenter: presented)
     }
 
+    /// A mouse click must not leave a row stuck in the keyboard "selected" state.
+    @Test func navigationClearsKeyboardRowSelection() throws {
+        let store = try AppStore(inMemory: true)
+        store.add(kind: .creditCard, name: "信用卡", cents: 1000, due: .now)
+        let bill = try #require(store.bills.first)
+
+        store.selectedBillID = bill.id
+        store.openDetail(bill)
+        #expect(store.selectedBillID == nil)
+
+        store.selectedBillID = bill.id
+        store.edit(bill)
+        #expect(store.selectedBillID == nil)
+
+        store.selectedBillID = bill.id
+        store.open(.home)
+        #expect(store.selectedBillID == nil)
+
+        store.selectedBillID = bill.id
+        store.beginAdding()
+        #expect(store.selectedBillID == nil)
+
+        store.selectedBillID = bill.id
+        store.copyToNextMonth(bill)
+        #expect(store.selectedBillID == nil)
+    }
+
     @Test func statusTextUsesOneVocabulary() {
         let cal = calendar()
         let now = date(2026, 11, 12, 10, calendar: cal)
@@ -55,6 +82,158 @@ struct InteractionTests {
         for cents: Int64 in [1, 99, 100, 126_080, Money.maximumCents] {
             #expect(Money.parse(Money.plain(cents)) == cents)
         }
+    }
+
+    @Test func borrowingPersistsAndIsExcludedOnlyFromThePendingTotal() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("test.store")
+        let store = try AppStore(dataURL: url)
+        let today = Calendar.current.startOfDay(for: .now)
+        let tomorrow = try #require(Calendar.current.date(byAdding: .day, value: 1, to: today))
+        store.add(kind: .creditCard, name: "信用卡", cents: 100, due: tomorrow)
+        store.add(kind: .loan, name: "贷款", cents: 200, due: tomorrow)
+        store.add(kind: .borrowing, name: "  ", cents: 900, due: today)
+        #expect(store.pending(of: .borrowing).isEmpty)
+        store.add(kind: .borrowing, name: " 小李 ", cents: 400, due: today)
+        let borrowing = try #require(store.pending(of: .borrowing).first)
+
+        #expect(store.pending.count == 3)
+        #expect(store.pending.first?.id == borrowing.id)
+        #expect(store.total == 300)
+        #expect(store.pending(of: .creditCard).map(\.amountInCents) == [100])
+        #expect(store.pending(of: .loan).map(\.amountInCents) == [200])
+        #expect(borrowing.name == "小李")
+        #expect(borrowing.nextReminder(now: today, hour: 9, minute: 0) != nil)
+        #expect(!borrowing.canAdvanceInstallment)
+
+        let reopened = try AppStore(dataURL: url)
+        let restored = try #require(reopened.pending(of: .borrowing).first)
+        #expect(restored.id == borrowing.id)
+        #expect(restored.name == "小李" && restored.amountInCents == 400 && restored.dueDate == today)
+        #expect(reopened.total == 300)
+        #expect(reopened.setPaid(restored, paid: true))
+        #expect(reopened.pending(of: .borrowing).isEmpty && reopened.history.first?.id == restored.id)
+        #expect(reopened.total == 300 && reopened.paidTotal == 400)
+        reopened.undoLastAction()
+        #expect(reopened.pending(of: .borrowing).first?.id == restored.id)
+        #expect(reopened.total == 300 && reopened.history.isEmpty)
+    }
+
+    @Test func editingLoanIntoBorrowingReclassifiesItAndClearsPeriods() throws {
+        let store = try AppStore(inMemory: true)
+        store.add(kind: .loan, name: "房贷", cents: 200, due: .now, currentInstallment: 3, totalInstallments: 12)
+        let bill = try #require(store.pending(of: .loan).first)
+        #expect(!store.update(bill, kind: .borrowing, name: " ", cents: 200, due: bill.dueDate))
+        #expect(store.total == 200 && bill.kind == .loan)
+        #expect(store.update(bill, kind: .borrowing, name: "小李", cents: 200, due: bill.dueDate))
+        #expect(store.pending(of: .loan).isEmpty)
+        #expect(store.pending(of: .borrowing).first?.id == bill.id)
+        #expect(store.total == 0)
+        #expect(bill.currentInstallment == nil && bill.totalInstallments == nil && !bill.canAdvanceInstallment)
+    }
+
+    @Test func categoryNavigationKeepsItsContext() throws {
+        let store = try AppStore(inMemory: true)
+        store.open(.category(.borrowing))
+        store.beginAdding()
+        #expect(store.route == .add && store.addReturn == .category(.borrowing))
+        #expect(store.sidebarRoute == .category(.borrowing))
+        store.add(kind: .borrowing, name: "小李", cents: 500, due: .now)
+        #expect(store.route == .category(.borrowing))
+        let bill = try #require(store.pending(of: .borrowing).first)
+        store.selectedBillID = bill.id
+        store.openDetail(bill)
+        #expect(store.selectedBillID == nil && store.route == .detail(bill.id))
+        #expect(store.detailSource == .category(.borrowing))
+        store.edit(bill)
+        #expect(store.editReturn == .detail(bill.id) && store.sidebarRoute == .category(.borrowing))
+        store.open(.category(.creditCard))
+        #expect(store.sidebarRoute == .category(.creditCard))
+        store.open(.add)
+        #expect(store.addReturn == .home)
+    }
+
+    @Test func loanPeriodsValidatePersistAndAdvance() throws {
+        #expect(PeriodNumber.parse("1") == 1)
+        #expect(PeriodNumber.parse("１２") == 12)
+        #expect(PeriodNumber.parse("") == nil && PeriodNumber.parse("0") == nil && PeriodNumber.parse("-1") == nil)
+
+        let store = try AppStore(inMemory: true)
+        store.add(kind: .loan, name: "房贷", cents: 741_500, due: .now,
+                  currentInstallment: 13, totalInstallments: 12)
+        #expect(store.bills.isEmpty)
+
+        store.add(kind: .loan, name: "房贷", cents: 741_500, due: .now,
+                  currentInstallment: 3, totalInstallments: 12)
+        let loan = try #require(store.bills.first)
+        #expect(loan.installmentText == "第 3 / 12 期" && loan.canAdvanceInstallment)
+
+        #expect(store.advanceInstallment(loan))
+        let next = try #require(store.pending.first)
+        #expect(next.currentInstallment == 4 && next.totalInstallments == 12)
+        #expect(next.installmentText == "第 4 / 12 期")
+
+        // A period edit is rejected before it can make the bill invalid.
+        #expect(!store.update(next, kind: .loan, name: "房贷", cents: 741_500, due: next.dueDate,
+                              currentInstallment: 12, totalInstallments: 11))
+        #expect(next.currentInstallment == 4 && next.totalInstallments == 12)
+
+        // The final period is not offered another installment.
+        #expect(store.update(next, kind: .loan, name: "房贷", cents: 741_500, due: next.dueDate,
+                             currentInstallment: 12, totalInstallments: 12))
+        #expect(next.currentInstallment == 12 && next.totalInstallments == 12 && !next.canAdvanceInstallment)
+        #expect(!store.advanceInstallment(next))
+        #expect(store.errorMessage == "已是最后一期，这笔贷款没有下一期。")
+        #expect(store.bills.count == 2)
+    }
+
+    /// The form opens a loan on `Bill.defaultInstallmentPlan` rather than a single period:
+    /// a 1 / 1 default silently hides 「下一期」 on every new or legacy loan.
+    @Test func loanDefaultsFormAPlanThatCanAdvance() throws {
+        let plan = Bill.defaultInstallmentPlan
+        #expect(plan.current > 0 && plan.total > plan.current)
+        let store = try AppStore(inMemory: true)
+        store.add(kind: .loan, name: "房贷", cents: 741_500, due: .now,
+                  currentInstallment: plan.current, totalInstallments: plan.total)
+        let loan = try #require(store.pending.first)
+        #expect(loan.installmentText == "第 \(plan.current) / \(plan.total) 期")
+        #expect(loan.canAdvanceInstallment)
+        #expect(store.advanceInstallment(loan))
+        #expect(store.pending.first?.installmentText == "第 \(plan.current + 1) / \(plan.total) 期")
+    }
+
+    /// Undoing a payment leaves the generated next installment in place (by design), so
+    /// the toast has to say that the ledger now holds two periods of the same loan.
+    @Test func undoingPaymentNamesTheNextInstallmentItKeeps() throws {
+        let store = try AppStore(inMemory: true)
+        store.add(kind: .loan, name: "车贷", cents: 298_000, due: .now,
+                  currentInstallment: 3, totalInstallments: 12)
+        let loan = try #require(store.pending.first)
+        #expect(store.advanceInstallment(loan))
+        #expect(store.setPaid(loan, paid: false))
+        #expect(store.toast == "已撤销还款，下一期账单仍保留")
+        #expect(store.pending.count == 2)
+        // A second 「下一期」 is still refused: the generated bill already exists.
+        #expect(!store.advanceInstallment(loan))
+
+        store.add(kind: .creditCard, name: "信用卡", cents: 100, due: .now)
+        let card = try #require(store.bills.first { $0.kind == .creditCard })
+        #expect(store.setPaid(card, paid: true))
+        #expect(store.setPaid(card, paid: false))
+        #expect(store.toast == "已撤销还款")
+    }
+
+    @Test func deletedLoansKeepTheirPeriodData() throws {
+        let store = try AppStore(inMemory: true)
+        store.add(kind: .loan, name: "车贷", cents: 298_000, due: .now,
+                  currentInstallment: 12, totalInstallments: 36)
+        let bill = try #require(store.bills.first)
+        store.delete(bill)
+        store.undoLastAction()
+        let restored = try #require(store.bills.first)
+        #expect(restored.currentInstallment == 12 && restored.totalInstallments == 36)
+        #expect(restored.installmentText == "第 12 / 36 期")
     }
 
     @Test func monthAfterClampsToTheMonthEnd() throws {

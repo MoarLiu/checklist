@@ -159,7 +159,6 @@ struct Version020Tests {
         store.snooze(loan, now: .now)
         let previousGeneration = loan.reminderGeneration
         let previousSnooze = loan.snoozeUntil
-        let previousRevision = store.revision
         var changed = 0
         store.onChange = { changed += 1 }
         fail = true
@@ -168,7 +167,7 @@ struct Version020Tests {
         #expect(loan.reminderGeneration == previousGeneration && loan.snoozeUntil == previousSnooze)
         #expect(store.pending.count == 1 && store.history.isEmpty && store.paidTotal == 0)
         #expect(try store.context.fetchCount(FetchDescriptor<Bill>()) == 1)
-        #expect(store.revision == previousRevision && changed == 0)
+        #expect(changed == 0)
         fail = false
         #expect(store.advanceInstallment(loan))
         #expect(store.pending.count == 1 && store.history.count == 1)

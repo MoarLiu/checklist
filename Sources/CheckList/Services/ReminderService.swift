@@ -134,8 +134,14 @@ final class ReminderService: NSObject, UNUserNotificationCenterDelegate {
         Task {
             do {
                 if await client.permission() == .denied {
-                    // macOS won't present the permission prompt a second time.
-                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+                    // macOS won't present the permission prompt a second time. Take the user
+                    // straight to this app's notification pane, not the settings home page.
+                    let bundleID = Bundle.main.bundleIdentifier ?? "app.chuzhangri.CheckList"
+                    let pane = URL(string:
+                        "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(bundleID)")
+                    if pane.map({ NSWorkspace.shared.open($0) }) != true {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+                    }
                     return
                 }
                 try await client.requestPermission()
@@ -410,13 +416,16 @@ struct ReminderCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "bell").font(.system(size: 14))
-                    .foregroundStyle(Design.darkTeal).frame(width: 28, height: 28)
+                    .foregroundStyle(Design.onAccent).frame(width: 28, height: 28)
                     .background(Design.accent, in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(preview ? "出账日 · 测试提醒" : "出账日 · 还款日 \(bill.dateText)")
-                        .font(.system(size: 10)).foregroundStyle(Design.secondary).lineLimit(1)
+                        .font(.system(size: 11)).foregroundStyle(Design.secondary).lineLimit(1)
                     Text("\(bill.name) · \(bill.statusText())")
                         .font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    if let installmentText = bill.installmentText {
+                        Text(installmentText).font(.system(size: 11)).foregroundStyle(Design.secondary)
+                    }
                 }
                 Spacer(minLength: 0)
                 Button { action(.dismiss) } label: {
@@ -436,7 +445,7 @@ struct ReminderCard: View {
                     Button { action(.paid) } label: {
                         Label("已经还款", systemImage: "checkmark").frame(maxWidth: .infinity)
                     }.buttonStyle(TealButtonStyle())
-                    if bill.kind == .loan {
+                    if bill.canAdvanceInstallment {
                         Button { action(.nextInstallment) } label: {
                             Label("下一期", systemImage: "arrow.right")
                         }
